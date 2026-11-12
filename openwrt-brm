@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""OWBM entry point. Runs from the source tree or from an unpacked release."""
+
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.realpath(__file__))
+_SRC = os.path.join(_HERE, "src")
+if os.path.isdir(os.path.join(_SRC, "owbm")):
+    sys.path.insert(0, _SRC)
+
+from owbm.cli import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

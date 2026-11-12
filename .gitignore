@@ -1,0 +1,41 @@
+# Python/test/build artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.ruff_cache/
+.mypy_cache/
+/build/
+/dist/
+*.egg-info/
+.venv/
+venv/
+
+# Local configuration, logs, temporary files, and plans
+.env
+.env.*
+!.env.example
+/config.toml
+/config.local.toml
+*.local.toml
+*.pem
+*.key
+*.log
+*.swp
+*.part
+/tmp/
+/plan/
+
+# User backup archives and release artifacts must not be committed accidentally
+*.owbm
+*.pyz
+*.pyz.sha256
+
+# OS and IDE state
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Stub command dispatcher for fake OpenWrt devices.
+
+Invoked through a symlink named after the command. Behaviour comes from the
+JSON file in $FAKE_PROFILE, which the test harness writes per device.
+"""
+
+import json
+import os
+import sys
+
+
+def out(text: str) -> None:
+    if text is None:
+        return
+    if not text.endswith("\n"):
+        text += "\n"
+    sys.stdout.write(text)
+
+
+def write_fake_config_backup(target: str, commands: dict) -> None:
+    """Produce a real gzip tar so the client can inspect it."""
+    import io
+    import tarfile
+
+    payload = commands.get("config_network", "config interface 'lan'\n\toption proto 'static'\n")
+    with tarfile.open(target, "w:gz") as tf:
+        data = payload.encode()
+        info = tarfile.TarInfo("./etc/config/network")
+        info.size = len(data)
+        info.mtime = 0
+        info.mode = 0o600
+        tf.addfile(info, io.BytesIO(data))
+        second = b"config dropbear\n"
+        info2 = tarfile.TarInfo("./etc/config/dropbear")
+        info2.size = len(second)
+        info2.mtime = 0
+        info2.mode = 0o600
+        tf.addfile(info2, io.BytesIO(second))
+        for config_name, config_value in commands.get("extra_configs", {}).items():
+            data = str(config_value).encode()
+            info = tarfile.TarInfo("./etc/config/" + config_name)
+            info.size = len(data)
+            info.mtime = 0
+            info.mode = 0o600
+            tf.addfile(info, io.BytesIO(data))
+
+
+def fake_apk_add(args) -> int:
+    """Record installs and expose them through the fake package database."""
+    root = os.environ.get("FAKE_DEVICE_ROOT", "")
+    if os.environ.get("FAKE_APK_ADD_FAIL"):
+        sys.stderr.write("ERROR: unable to install (simulated)\n")
+        return 1
+    files = [item for item in args if not item.startswith("-") and item != "add"]
+    with open(os.path.join(root, "install.log"), "a", encoding="utf-8") as handle:
+        handle.write(" ".join(args) + "\n")
+    installed = set()
+    for item in files:
+        name = os.path.basename(item)
+        for suffix in (".apk", ".ipk"):
+            if name.endswith(suffix):
+                name = name[:-len(suffix)]
+                break
+        installed.add(name)
+    profile_path = os.environ.get("FAKE_PROFILE", "")
+    try:
+        with open(profile_path, "r", encoding="utf-8") as handle:
+            profile = json.load(handle)
+        commands = profile.setdefault("commands", {})
+        commands["installed"] = sorted(set(commands.get("installed", [])) | installed)
+        with open(profile_path, "w", encoding="utf-8") as handle:
+            json.dump(profile, handle)
+    except (OSError, ValueError):
+        pass
+    return 0
+
+
+def fake_apk_fetch(args, commands: dict) -> int:
+    outdir = None
+    spec = None
+    index = 0
+    while index < len(args):
+        item = args[index]
+        if item in ("-o", "--output", "--cache-dir", "--repository", "--arch") and index + 1 < len(args):
+            if item in ("-o", "--output"):
+                outdir = args[index + 1]
+            elif item == "--cache-dir":
+                commands.setdefault("cache_dirs", []).append(args[index + 1])
+            index += 2
+            continue
+        if item == "update":
+            commands["index_updated"] = True
+            index += 1
+            continue
+        if not item.startswith("-") and item != "fetch":
+            spec = item
+        index += 1
+    if not outdir or not spec:
+        return 1
+    import os
+
+    versions = commands.get("package_versions", {})
+    if "=" in spec:
+        pkg, ver = spec.split("=", 1)
+        if versions.get(pkg) != ver:
+            return 1
+    else:
+        pkg = spec
+        if pkg not in versions:
+            return 1
+        ver = versions[pkg]
+    path = os.path.join(outdir, f"{pkg}-{ver}.apk")
+    with open(path, "wb") as handle:
+        handle.write(b"FAKEAPK:" + pkg.encode())
+    return 0
+
+
+def main() -> int:
+    name = os.path.basename(sys.argv[0])
+    args = sys.argv[1:]
+    try:
+        with open(os.environ.get("FAKE_PROFILE", ""), "r", encoding="utf-8") as handle:
+            profile = json.load(handle)
+    except (OSError, ValueError):
+        profile = {}
+    commands = profile.get("commands", {})
+
+    if name == "uname":
+        if "-r" in args:
+            out(commands.get("uname_r", ""))
+        elif "-m" in args:
+            out(commands.get("uname_m", ""))
+        else:
+            out(commands.get("uname_a", "Linux fake 0.0.0 fake"))
+        return 0
+    if name == "df":
+        out("\n".join(commands.get("df", [])))
+        return 0
+    if name == "date":
+        if args and args[0] == "+%s":
+            import time as _time
+
+            out(str(int(_time.time())))
+            return 0
+        out(commands.get("date_utc", "2026-01-01T00:00:00Z"))
+        return 0
+    if name == "apk":
+        if "--print-arch" in args:
+            out(commands.get("apk_arch", ""))
+            return 0
+        if "update" in args:
+            commands["index_updated"] = True
+            out("OK: index")
+            return 0
+        if "search" in args:
+            name = args[-1]
+            return 0 if name in commands.get("package_versions", {}) else 1
+        if "info" in args and "-e" in args:
+            name = args[-1]
+            return 0 if name in commands.get("installed", []) else 1
+        if "fetch" in args:
+            return fake_apk_fetch(args, commands)
+        if "add" in args:
+            return fake_apk_add(args)
+        out(commands.get("apk_other", ""))
+        return 0
+    if name == "opkg":
+        if "print-architecture" in args:
+            out(commands.get("opkg_arch", ""))
+            return 0
+        if args and args[0] == "install":
+            return fake_apk_add(args)
+        if args and args[0] == "download":
+            pkg = args[1]
+            versions = commands.get("package_versions", {})
+            target = f"{pkg}_{versions.get(pkg, '1.0')}.ipk"
+            with open(target, "wb") as handle:
+                handle.write(b"FAKEIPK")
+            return 0
+        out(commands.get("opkg_other", ""))
+        return 0
+    if name == "opkg":
+        if "print-architecture" in args:
+            out(commands.get("opkg_arch", ""))
+        else:
+            out(commands.get("opkg_other", ""))
+        return 0
+    if name == "ubus":
+        out(commands.get("ubus_board", ""))
+        return 0
+    if name == "sysupgrade":
+        if "-b" in args and len(args) >= 2:
+            target = args[-1]
+            write_fake_config_backup(target, commands)
+            return 0
+        out(commands.get("sysupgrade_help", ""))
+        return 0
+    if name == "id":
+        out(commands.get("id_u", "0"))
+        return 0
+    out("")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
