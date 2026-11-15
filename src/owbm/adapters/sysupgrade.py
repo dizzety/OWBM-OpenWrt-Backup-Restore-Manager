@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass
 from typing import List
 
+from .. import i18n
+
 _SHORT_BACKUP = re.compile(r"(?:^|\s)-b(?:[\s,]|$)|--create-backup|--backup", re.MULTILINE)
 _SHORT_RESTORE = re.compile(r"(?:^|\s)-r(?:[\s,]|$)|--restore-backup|--restore", re.MULTILINE)
 
@@ -43,12 +45,12 @@ def analyze(path: str, help_lines: List[str]) -> SysupgradeInfo:
     if not path:
         return SysupgradeInfo(
             available=False,
-            notes=("Утилита sysupgrade не найдена: нативная резервная копия конфигурации недоступна.",),
+            notes=(i18n.tr("sysupgrade.unavailable"),),
         )
     notes: List[str] = []
     text = "\n".join(help_lines)
     if not help_lines:
-        notes.append("Справка sysupgrade недоступна; поддержка -b/-r принята по умолчанию.")
+        notes.append(i18n.tr("sysupgrade.help_unavailable"))
     supports_backup = True
     supports_restore = True
     if help_lines:

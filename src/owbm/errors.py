@@ -7,7 +7,9 @@ and whether it is safe to continue. Codes are stable API: never reuse them.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Optional
+
+from . import i18n
 
 # --- exit codes (documented in docs/ERRORS.md) -------------------------------
 EXIT_OK = 0
@@ -292,6 +294,54 @@ CATALOG: Dict[str, Spec] = {
     ),
 }
 
+_SAFE_UNTOUCHED_EN = "The device and archives were not modified."
+_SAFE_READONLY_EN = "This was a read-only operation."
+
+ENGLISH_CATALOG: Dict[str, Spec] = {
+    "OWBM-E-CFG-001": Spec(EXIT_USAGE, "Configuration file {path} cannot be read: {reason}", "The file is damaged, unavailable, or has incorrect permissions.", "Fix or remove the file; without it, OWBM uses its default settings.", _SAFE_READONLY_EN),
+    "OWBM-E-CFG-002": Spec(EXIT_USAGE, "Invalid value for setting {key}: {reason}", "The value does not match the expected format.", "Fix the value in the configuration file or set it with a command-line option.", _SAFE_READONLY_EN),
+    "OWBM-E-CFG-003": Spec(EXIT_USAGE, "Connection profile {name!r} was not found.", "The saved settings do not contain a profile with that name.", "Specify the device address directly with --host or create a connection profile.", _SAFE_READONLY_EN),
+    "OWBM-E-CFG-004": Spec(EXIT_PREFLIGHT, "Required program {tool} was not found.", "It is required for: {purpose}.", "Install it using your distribution's package manager or disable this feature.", _SAFE_READONLY_EN),
+    "OWBM-E-SSH-001": Spec(EXIT_PREFLIGHT, "The ssh program was not found.", "The OpenSSH client is not installed or could not be located.", "Install the OpenSSH client using your distribution's package manager.", _SAFE_READONLY_EN),
+    "OWBM-E-SSH-002": Spec(EXIT_NETWORK, "Could not connect to {host}:{port}.", "{reason}", "Check the address, device availability, and SSH settings.", "If this happened during restore or migration, check the device and any saved pre-restore archive before trying again."),
+    "OWBM-E-SSH-003": Spec(EXIT_NETWORK, "The SSH host key for {host} does not match the saved key.", "The device may have been reinstalled or replaced, or its key may have been regenerated.", "Verify the fingerprint against the device. If you intentionally reinstalled or replaced it, run `owbm trust --host {host} --accept-host-key` after checking it again.", "If this happened during restore or migration, check the device and any saved pre-restore archive before trying again."),
+    "OWBM-E-SSH-004": Spec(EXIT_NETWORK, "SSH authentication failed for {user}@{host}.", "The password may be wrong, the device may have rejected the key, or the required key may not be loaded.", "Check the username and password or SSH key. If you use an SSH agent, make sure the required key is loaded.", _SAFE_READONLY_EN),
+    "OWBM-E-SSH-005": Spec(EXIT_NETWORK, "The SSH operation timed out after {timeout} seconds.", "The device is not responding, or the transfer took longer than expected.", "Check the connection and device state. Before retrying a modifying operation, determine whether it already ran.", "It is unknown whether the operation changed the device. Check its state and any saved pre-restore archive before trying again."),
+    "OWBM-E-SSH-006": Spec(EXIT_PREFLIGHT, "The SSH host key was not confirmed by the user.", "On the first connection, verify that the SSH key belongs to your device.", "Compare the displayed fingerprint with a trusted source, then confirm it.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-SSH-007": Spec(EXIT_PREFLIGHT, "Required program {tool} was not found.", "It is needed to check or retrieve the SSH host key.", "Install the openssh-client package, which provides {tool}.", _SAFE_READONLY_EN),
+    "OWBM-E-SSH-008": Spec(EXIT_PREFLIGHT, "Could not retrieve the SSH host key for {host}:{port}.", "{reason}", "Make sure the device is reachable over SSH, then try again.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-DSC-001": Spec(EXIT_DEVICE, "Device {host} does not appear to be running OpenWrt.", "The device did not provide the expected OpenWrt information.", "Check the address and make sure SSH reaches an OpenWrt device.", _SAFE_READONLY_EN),
+    "OWBM-E-DSC-002": Spec(EXIT_DEVICE, "Could not retrieve device information.", "{reason}", "Check SSH access and free space on the device, then try again.", _SAFE_READONLY_EN),
+    "OWBM-E-DSC-003": Spec(EXIT_DEVICE, "Could not parse the device response: {reason}", "The device returned data in an unexpected format.", "Try again. If the problem persists, save a verbose log for support.", _SAFE_READONLY_EN),
+    "OWBM-E-STO-001": Spec(EXIT_STORAGE, "Not enough free space in {path}: {free} available, {need} required.", "The backup storage directory is almost full.", "Free up space or choose another directory with --backup-root. OWBM does not delete old archives.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-STO-002": Spec(EXIT_STORAGE, "File {path} already exists.", "Archive names are unique and overwriting is disabled.", "This prevents data loss. Try again to create a new archive with a unique name.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-STO-003": Spec(EXIT_STORAGE, "No permission to write to {path}.", "The directory belongs to another user or is mounted read-only.", "Choose another directory or fix its permissions.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-STO-004": Spec(EXIT_STORAGE, "Backup directory {path} is already in use by another operation.", "Running multiple operations on the same directory at once is unsafe.", "Wait for the other operation to finish, then try again.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-ARC-001": Spec(EXIT_ARCHIVE, "File was not found or is not an OWBM archive: {path}", "The path may be wrong, the file may be damaged, or it may not be an OWBM archive.", "Check the path (`owbm list` shows available archives). A damaged archive cannot be restored.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-FMT-001": Spec(EXIT_ARCHIVE, "This archive was created by a newer version of OWBM.", "The installed version cannot read this archive format.", "Update OWBM and check the archive again.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-CHK-001": Spec(EXIT_ARCHIVE, "Integrity check failed for archive member {member!r}.", "The archive is damaged or was modified after it was created.", "Do not restore this archive. Use another copy.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-CHK-002": Spec(EXIT_ARCHIVE, "Archive is damaged or incomplete: {reason}", "Required files are missing or empty.", "Use another backup.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-CHK-003": Spec(EXIT_ARCHIVE, "Archive contains an unsafe path: {path}", "A path in the archive would write a file outside the restore directory.", "Do not use this archive. Obtain another copy and report the suspicious file.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-CHK-004": Spec(EXIT_ARCHIVE, "Archive contains an unsupported object: {path} ({kind}).", "This object cannot be restored safely from the archive.", "Do not use this copy; choose another valid archive.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-CMP-001": Spec(EXIT_INCOMPATIBLE, "The archive was created on a device with different characteristics: {reason}", "Settings or software from the archive may not work on this device.", "To move to another device, use `migrate`, review its plan, and do not apply unsuitable settings.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-CMP-002": Spec(EXIT_INCOMPATIBLE, "Not enough space on the target device: {need} required, {free} available.", "The device does not have enough space for the saved files.", "Free up space or select less data in the restore plan.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-CMP-003": Spec(EXIT_INCOMPATIBLE, "Could not prepare a safe rollback for network settings: {reason}", "If SSH disconnects, the device will not be able to restore the previous connection automatically.", "Do not change network settings remotely without another way to access the device. Exclude them from the plan or connect locally.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-RST-001": Spec(EXIT_PARTIAL, "Restore stopped at step {step}: {reason}", "The operation did not finish; some changes may have been applied.", "Do not blindly run restore again. Check the device and save the `pre-restore` archive.", "Check the device state before continuing."),
+    "OWBM-E-RST-002": Spec(EXIT_PARTIAL, "After step {step} failed, OWBM restored the previous network settings.", "{reason}", "Check the connection and device. This does not necessarily undo package installation or file copying.", "Network settings were restored; check the rest of the device state."),
+    "OWBM-E-INT-001": Spec(EXIT_INTERRUPTED, "Operation stopped by the user.", "You pressed Ctrl+C or stopped input.", "If you interrupted a restore or migration, check the device and save a pre-restore archive if one was created.", "Completed archives were preserved. Device changes depend on which operation was interrupted; check the device state."),
+    "OWBM-E-MIG-001": Spec(EXIT_USAGE, "The selected migration settings changed after the plan was prepared.", "The plan was prepared with different options.", "Prepare the plan again and apply it without changing the selected options.", _SAFE_UNTOUCHED_EN),
+    "OWBM-E-MIG-002": Spec(EXIT_INCOMPATIBLE, "Device information changed after the migration plan was prepared.", "The plan may have been prepared for another device or before its settings changed.", "Check the address, prepare a new plan, and compare it carefully with the target device.", "The target device and source archive were not modified. A pre-restore snapshot may have been created."),
+    "OWBM-E-MIG-003": Spec(EXIT_DEVICE, "Could not safely read device information.", "{reason}", "Check the SSH connection and prepare the plan again.", _SAFE_READONLY_EN),
+}
+
+_ENGLISH_UNKNOWN = Spec(
+    EXIT_DEVICE,
+    "Unexpected error.",
+    "The cause of the error could not be determined.",
+    "Run the program with --verbose and save the log.",
+    "The device state is unknown; check it manually.",
+)
+
 
 class OwbmError(Exception):
     """Typed error with stable code and user-facing explanation."""
@@ -299,21 +349,25 @@ class OwbmError(Exception):
     def __init__(self, code: str, **context: Any) -> None:
         self.code = code
         self.context: Dict[str, Any] = context
-        spec = CATALOG.get(code)
-        self.spec = spec or Spec(
-            _UNKNOWN.exit_code,
-            _UNKNOWN.what,
-            _UNKNOWN.why,
-            _UNKNOWN.fix,
-            _UNKNOWN.safe,
-        )
-        self.exit_code = self.spec.exit_code
+        self._ru_spec = CATALOG.get(code, _UNKNOWN)
+        self.exit_code = self._ru_spec.exit_code
         self.missing_context = self._missing()
         super().__init__(self.message)
 
+    @property
+    def spec(self) -> Spec:
+        if i18n.get_language() == "en":
+            return ENGLISH_CATALOG.get(self.code, _ENGLISH_UNKNOWN)
+        return self._ru_spec
+
     def _fmt(self, template: str) -> str:
+        values = dict(self.context)
+        for field in ("reason", "step", "kind"):
+            value = values.get(field)
+            if isinstance(value, str):
+                values[field] = i18n.localize_text(value)
         try:
-            return template.format(**self.context)
+            return template.format(**values)
         except (KeyError, IndexError):
             return template
 
@@ -323,7 +377,7 @@ class OwbmError(Exception):
         out = []
         try:
             fields = [
-                f for _, f, _, _ in string.Formatter().parse(self.spec.what) if f
+                f for _, f, _, _ in string.Formatter().parse(self._ru_spec.what) if f
             ]
         except ValueError:
             return out
@@ -353,13 +407,16 @@ class OwbmError(Exception):
         return f"[{self.code}] {self.what}"
 
     def render(self) -> str:
-        lines = [f"Ошибка {self.code}", f"  Что произошло: {self.what}"]
+        lines = [
+            i18n.tr("common.error.title", code=self.code),
+            f"  {i18n.tr('common.error.what_happened')}: {self.what}",
+        ]
         if self.why:
-            lines.append(f"  Почему: {self.why}")
+            lines.append(f"  {i18n.tr('common.error.why')}: {self.why}")
         if self.fix:
-            lines.append(f"  Как исправить: {self.fix}")
+            lines.append(f"  {i18n.tr('common.error.how_to_fix')}: {self.fix}")
         if self.safe:
-            lines.append(f"  Можно ли продолжать: {self.safe}")
+            lines.append(f"  {i18n.tr('common.error.safe_to_continue')}: {self.safe}")
         return "\n".join(lines)
 
     def as_dict(self) -> Mapping[str, Any]:
@@ -377,50 +434,80 @@ def fail(code: str, **context: Any) -> "OwbmError":
     return OwbmError(code, **context)
 
 
-EXIT_NAMES = {
-    EXIT_OK: "успех",
-    EXIT_USAGE: "ошибка команды или настройки",
-    EXIT_PREFLIGHT: "не выполнены условия для запуска",
-    EXIT_INCOMPATIBLE: "архив не подходит устройству",
-    EXIT_NETWORK: "проблема с сетью или SSH",
-    EXIT_DEVICE: "ошибка устройства",
-    EXIT_ARCHIVE: "проблема с архивом",
-    EXIT_STORAGE: "проблема с местом или правами доступа",
-    EXIT_PARTIAL: "операция выполнена не полностью; прочитайте сообщение",
-    EXIT_INTERRUPTED: "операция остановлена",
+EXIT_NAME_KEYS = {
+    EXIT_OK: "common.error.exit_ok",
+    EXIT_USAGE: "common.error.exit_usage",
+    EXIT_PREFLIGHT: "common.error.exit_preflight",
+    EXIT_INCOMPATIBLE: "common.error.exit_incompatible",
+    EXIT_NETWORK: "common.error.exit_network",
+    EXIT_DEVICE: "common.error.exit_device",
+    EXIT_ARCHIVE: "common.error.exit_archive",
+    EXIT_STORAGE: "common.error.exit_storage",
+    EXIT_PARTIAL: "common.error.exit_partial",
+    EXIT_INTERRUPTED: "common.error.exit_interrupted",
 }
+EXIT_NAMES = {code: i18n.tr(key, language="ru") for code, key in EXIT_NAME_KEYS.items()}
 
 
-def catalog_markdown() -> str:
-    """Render this catalog as documentation. docs/ERRORS.md is generated from here."""
+def exit_name(code: int, language: Optional[str] = None) -> str:
+    key = EXIT_NAME_KEYS.get(code)
+    return i18n.tr(key, language=language) if key else "unknown exit code"
+
+
+def catalog_markdown(language: str = "ru") -> str:
+    """Render the error catalog in one locale for the generated documentation."""
+    locale = i18n.normalize_language(language)
+    if locale == "en":
+        title = "# Troubleshooting errors"
+        intro = (
+            "Find the same code in the program output. This reference explains the cause, "
+            "possible fixes, and whether it is safe to continue. Values in braces are "
+            "replaced with details from your message. A `pre-restore` archive is a snapshot "
+            "of the target device's settings made before restore. In examples, `owbm` is "
+            "the installed command; for a downloaded `owbm.pyz`, use `python3 owbm.pyz`, "
+            "or run `./openwrt-brm` from the source directory."
+        )
+        code_heading, value_heading = "Code", "Meaning"
+        errors_heading = "Error messages"
+    else:
+        title = "# Если появилась ошибка"
+        intro = (
+            "Найдите такой же код в сообщении программы. Ниже объяснены причина ошибки, "
+            "что можно сделать и безопасно ли продолжать. Значения в фигурных скобках "
+            "заменяются конкретными данными из вашего сообщения. Копия перед "
+            "восстановлением (`pre-restore`) — это сохранённые настройки целевого "
+            "устройства. В примерах `owbm` — установленная команда; для скачанного "
+            "`owbm.pyz` используйте `python3 owbm.pyz`, а из исходного каталога — "
+            "`./openwrt-brm`."
+        )
+        code_heading, value_heading = "Код", "Значение"
+        errors_heading = "Сообщения об ошибках"
     lines = [
-        "# Если появилась ошибка",
+        title,
         "",
-        "Найдите такой же код в сообщении программы. Ниже объяснены причина ошибки, "
-        "что можно сделать и безопасно ли продолжать. Значения в фигурных скобках "
-        "заменяются конкретными данными из вашего сообщения. Копия перед "
-        "восстановлением (`pre-restore`) — это сохранённые настройки целевого "
-        "устройства. В примерах `owbm` — установленная команда; для скачанного "
-        "`owbm.pyz` используйте `python3 owbm.pyz`, а из исходного каталога — "
-        "`./openwrt-brm`.",
+        intro,
         "",
-        "## Коды завершения",
+        "## Exit codes" if locale == "en" else "## Коды завершения",
         "",
-        "| Код | Значение |",
+        f"| {code_heading} | {value_heading} |",
         "| --- | --- |",
     ]
-    for code in sorted(EXIT_NAMES):
-        lines.append(f"| {code} | {EXIT_NAMES[code]} |")
-    lines += ["", "## Сообщения об ошибках", ""]
+    for code in sorted(EXIT_NAME_KEYS):
+        lines.append(f"| {code} | {exit_name(code, locale)} |")
+    lines += ["", f"## {errors_heading}", ""]
     for code in sorted(CATALOG):
-        spec = CATALOG[code]
+        spec = ENGLISH_CATALOG.get(code, _ENGLISH_UNKNOWN) if locale == "en" else CATALOG[code]
+        if locale == "en":
+            labels = ("What happened", "Why", "How to fix", "Is it safe to continue")
+        else:
+            labels = ("Что произошло", "Почему", "Как исправить", "Можно ли продолжать")
         lines += [
             f"### {code}",
             "",
-            f"- Что произошло: {spec.what}",
-            f"- Почему: {spec.why}",
-            f"- Как исправить: {spec.fix}",
-            f"- Можно ли продолжать: {spec.safe}",
+            f"- {labels[0]}: {spec.what}",
+            f"- {labels[1]}: {spec.why}",
+            f"- {labels[2]}: {spec.fix}",
+            f"- {labels[3]}: {spec.safe}",
             "",
         ]
     return "\n".join(lines)

@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from owbm import archive, manifest
+from owbm import archive, i18n, manifest
 from owbm.errors import OwbmError
 
 
@@ -101,6 +101,18 @@ def test_unknown_fields_are_ignored():
     data = _build().as_dict()
     data["future_field"] = {"anything": 1}
     assert manifest.validate(data).archive_id == data["archive_id"]
+
+
+def test_empty_component_id_uses_current_locale_in_error():
+    data = _build().as_dict()
+    data["components"][0]["id"] = ""
+    with pytest.raises(OwbmError) as raised:
+        manifest.validate(data)
+    assert "пусто" in raised.value.what
+    with i18n.language_context("en"):
+        with pytest.raises(OwbmError) as raised_en:
+            manifest.validate(data)
+        assert "empty" in raised_en.value.what
 
 
 def test_compatibility_key_variants():

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
+from .. import i18n
 from ..discovery import DevicePassport
 from ..manifest import Manifest
 from ..util import human_size
@@ -23,17 +24,21 @@ RISK_HIGH = "high"
 
 RISK_MARK = {RISK_NONE: "·", RISK_LOW: "·", RISK_MEDIUM: "!", RISK_HIGH: "!!"}
 
-COMPONENT_TITLES = {
-    "configuration": "Конфигурация OpenWrt",
-    "overlay_upper": "Файлы системы и приложений",
-    "rootfs": "Файлы системы (корневая ФС)",
-    "rootfs": "Файлы системы (корневая ФС)",
-    "packages_inventory": "Список пакетов",
-    "packages_binaries": "Бинарные пакеты",
-    "user_data": "Пользовательские каталоги",
-    "system_state": "Службы и скрипты",
-    "application_data": "Данные приложений",
+COMPONENT_TITLE_KEYS = {
+    "configuration": "restore.plan.title.configuration",
+    "overlay_upper": "restore.plan.title.overlay_upper",
+    "rootfs": "restore.plan.title.rootfs",
+    "packages_inventory": "restore.plan.title.packages_inventory",
+    "packages_binaries": "restore.plan.title.packages_binaries",
+    "user_data": "restore.plan.title.user_data",
+    "system_state": "restore.plan.title.system_state",
+    "application_data": "restore.plan.title.application_data",
 }
+
+
+def component_title(component_id: str) -> str:
+    key = COMPONENT_TITLE_KEYS.get(component_id)
+    return i18n.tr(key) if key else component_id
 
 NOT_APPLIED = {"packages_inventory"}
 
@@ -122,14 +127,14 @@ class RestorePlan:
         }
 
     def describe(self) -> List[str]:
-        lines = ["Порядок действий:"]
+        lines = [i18n.tr("restore.plan.steps_heading")]
         for step in self.steps:
             size = f" {human_size(step.size):>9}" if step.size else ""
             lines.append(f"  {step.mark} {step.order:>3}. {step.title:<44}{size}")
             if step.detail:
                 lines.append(f"            {step.detail}")
         for item in self.skipped:
-            lines.append(f"  –  ---  {item['title']:<44}  пропущено: {item['reason']}")
+            lines.append(i18n.tr("restore.plan.skipped", title=item['title'], reason=item['reason']))
         return lines
 
 
@@ -160,7 +165,7 @@ def build_plan(
     for component in parsed.components:
         if selected and component.id not in set(selected):
             plan.skipped.append(
-                {"id": component.id, "title": COMPONENT_TITLES.get(component.id, component.id), "reason": "не выбрано"}
+                {"id": component.id, "title": component_title(component.id), "reason": i18n.tr("restore.plan.reason.not_selected")}
             )
             continue
         if component.id == "overlay_upper" and not (
@@ -169,8 +174,8 @@ def build_plan(
             plan.skipped.append(
                 {
                     "id": component.id,
-                    "title": COMPONENT_TITLES.get(component.id, component.id),
-                    "reason": "на устройстве нет отдельного записываемого слоя: собирать нечего",
+                    "title": component_title(component.id),
+                    "reason": i18n.tr("restore.plan.reason.no_overlay"),
                 }
             )
             continue
@@ -178,8 +183,8 @@ def build_plan(
             plan.skipped.append(
                 {
                     "id": component.id,
-                    "title": COMPONENT_TITLES.get(component.id, component.id),
-                    "reason": "перечень для справки: применять нечего",
+                    "title": component_title(component.id),
+                    "reason": i18n.tr("restore.plan.reason.inventory_only"),
                 }
             )
             continue
@@ -187,8 +192,8 @@ def build_plan(
             plan.skipped.append(
                 {
                     "id": component.id,
-                    "title": COMPONENT_TITLES.get(component.id, component.id),
-                    "reason": "несовместимо с целевым устройством",
+                    "title": component_title(component.id),
+                    "reason": i18n.tr("restore.plan.reason.incompatible"),
                 }
             )
             continue
@@ -197,50 +202,44 @@ def build_plan(
     if selected:
         unknown = [item for item in selected if item not in {c.id for c in parsed.components}]
         for item in unknown:
-            plan.warnings.append(f"Категория «{item}» в архиве отсутствует.")
+            plan.warnings.append(i18n.tr("restore.plan.warning.missing_category", item=item))
 
     if not chosen:
-        plan.blockers.append("Не выбрано ни одной категории для восстановления.")
+        plan.blockers.append(i18n.tr("restore.plan.blocker.no_category"))
 
     if any(item.id == "configuration" for item in parsed.components):
-        plan.warnings.append(
-            "Восстановление конфигурации переустанавливает ключи Dropbear: SSH-ключ устройства "
-            "изменится. Программа обновит свой known_hosts после проверки платы и MAC."
-        )
+        plan.warnings.append(i18n.tr("restore.plan.warning.dropbear"))
 
     for check in report.blocking:
-        plan.blockers.append(
-            f"{check.title}: в архиве «{check.source}», на устройстве «{check.target}». "
-            + (check.mitigation or "Восстановление на это устройство невозможно.")
-        )
+        plan.blockers.append(i18n.tr(
+            "restore.plan.blocker.compatibility", title=check.title, source=check.source,
+            target=check.target, mitigation=check.mitigation or i18n.tr("restore.plan.blocker.impossible"),
+        ))
 
     watchdog_available = passport.tools.has("nohup") or passport.tools.has("setsid")
     needs_network = any(item in NETWORK_COMPONENTS for item in chosen)
     if needs_network and not watchdog_available:
-        plan.blockers.append(
-            "На устройстве нет nohup/setsid: безопасный откат сети невозможен. "
-            "Выполните Selective Restore без сетевых категорий или обеспечьте локальный доступ."
-        )
+        plan.blockers.append(i18n.tr("restore.plan.blocker.no_watchdog"))
 
     # ordered steps --------------------------------------------------------
     order = 5
     plan.steps.append(
         PlanStep(
             id="pre-restore-backup",
-            title="Резервная копия целевого устройства",
+            title=i18n.tr("restore.plan.step.pre_restore"),
             order=order,
             risk=RISK_NONE,
-            detail=f"обязательна; будет сохранена в хранилище как pre-restore ({parsed.device.get('release', '?')} → архив не изменяется)",
+            detail=i18n.tr("restore.plan.detail.pre_restore", release=parsed.device.get('release', '?')),
         )
     )
     order += 1
     plan.steps.append(
         PlanStep(
             id="stage-rollback",
-            title="Сохранить сетевые настройки цели для отката",
+            title=i18n.tr("restore.plan.step.stage_rollback"),
             order=order,
             risk=RISK_LOW,
-            detail="network, firewall, dropbear копируются в /tmp/owbm-rollback на устройстве",
+            detail=i18n.tr("restore.plan.detail.stage_rollback"),
         )
     )
     order += 1
@@ -248,11 +247,11 @@ def build_plan(
         plan.steps.append(
             PlanStep(
                 id="arm-watchdog",
-                title="Включить сторожевой процесс возврата сети",
+                title=i18n.tr("restore.plan.step.watchdog"),
                 order=order,
                 risk=RISK_LOW,
                 touches_network=True,
-                detail="если связь не восстановится за отведённое время, устройство вернётся к прежней сети",
+                detail=i18n.tr("restore.plan.detail.watchdog"),
             )
         )
         order += 1
@@ -264,16 +263,16 @@ def build_plan(
         plan.steps.append(
             PlanStep(
                 id=f"apply-{component.id}",
-                title=COMPONENT_TITLES.get(component.id, component.id),
+                title=component_title(component.id),
                 order=component.restore_order + 10,
                 risk=COMPONENT_RISK.get(component.id, RISK_LOW),
                 component=component.id,
                 touches_network=touches,
                 size=int(component.uncompressed_size or component.size),
                 detail=(
-                    component.notes
+                    i18n.localize_text(component.notes)
                     + (
-                        " — будут установлены из архива (интернет не нужен)"
+                        i18n.tr("restore.plan.detail.packages_offline")
                         if component.id == "packages_binaries"
                         and not ({"rootfs", "overlay_upper"} & set(chosen))
                         else ""
@@ -286,11 +285,11 @@ def build_plan(
         plan.steps.append(
             PlanStep(
                 id="reload-network",
-                title="Применить сетевые настройки",
+                title=i18n.tr("restore.plan.step.reload_network"),
                 order=95,
                 risk=RISK_HIGH,
                 touches_network=True,
-                detail="самый рискованный шаг: SSH-соединение может прерваться",
+                detail=i18n.tr("restore.plan.detail.reload_network"),
             )
         )
 
@@ -298,19 +297,19 @@ def build_plan(
         plan.steps.append(
             PlanStep(
                 id="reboot",
-                title="Перезагрузка устройства",
+                title=i18n.tr("restore.plan.step.reboot"),
                 order=99,
                 risk=RISK_MEDIUM,
-                detail="после перезагрузки проверьте сеть, DNS и службы",
+                detail=i18n.tr("restore.plan.detail.reboot"),
             )
         )
     plan.steps.append(
         PlanStep(
             id="confirm",
-            title="Подтвердить успех и отключить сторожевой процесс",
+            title=i18n.tr("restore.plan.step.confirm"),
             order=97,
             risk=RISK_NONE,
-            detail="выполняется после проверки связи по новому адресу",
+            detail=i18n.tr("restore.plan.detail.confirm"),
         )
     )
 

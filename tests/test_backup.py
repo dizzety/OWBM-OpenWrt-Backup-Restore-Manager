@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from owbm import archive, capabilities, discovery, manifest as manifest_mod, storage
+from owbm import archive, capabilities, discovery, i18n, manifest as manifest_mod, storage
 from owbm.backup import collector, packager
-from owbm.errors import OwbmError
+from owbm.errors import OwbmError, fail
 from owbm.log import Logger
 
 
@@ -420,6 +420,69 @@ def test_user_data_tar_list_entries_cannot_be_tar_directives(tmp_path, monkeypat
     assert "printf './%s\\n' \"${p#/}\"" in captured["script"]
 
 
+def test_archive_error_details_are_canonical_russian():
+    with i18n.language_context("en"):
+        error = fail("OWBM-E-CHK-002", reason=i18n.tr("archive.error.invalid_json"))
+        detail = packager._archive_error_detail(error)
+    assert "Архив повреждён или неполон" in detail
+    assert "manifest.json не является корректным JSON" in detail
+    assert packager._archive_error_detail(OSError(28, "No space left on device")) == "OSError (errno 28)"
+    assert packager._archive_error_detail(OSError(28, "место закончилось")) == "OSError (errno 28)"
+    assert packager._archive_error_detail(RuntimeError("different wording")) == "RuntimeError"
+
+
+def test_archive_metadata_uses_canonical_russian_locale(device, tmp_path, logger):
+    dev = device("apk_overlay_x86")
+    client, passport, profile, store = _setup(dev, tmp_path)
+    with i18n.language_context("en"):
+        result = packager.create_backup(
+            client, passport, profile, store, packager.BackupOptions(), logger
+        )
+    notes = {item["id"]: item["notes"] for item in result.manifest["components"]}
+    assert notes["packages_inventory"].endswith("пакетов")
+    assert "packages" not in notes["packages_inventory"]
+    assert i18n.localize_text(notes["packages_inventory"], language="en").endswith("packages")
+
+    def capability_messages(value):
+        messages = []
+        for support in value.values():
+            if isinstance(support, dict):
+                messages.extend(
+                    support[field] for field in ("reason", "title")
+                    if isinstance(support.get(field), str)
+                )
+        messages.extend(value.get("warnings", []))
+        messages.extend(value.get("notes", []))
+        return messages
+
+    capabilities_snapshot = result.manifest["capabilities_snapshot"]
+    serialized_capabilities = json.loads(
+        archive.read_member(result.path, "inventory/capabilities.json").decode("utf-8")
+    )
+    passport = json.loads(
+        archive.read_member(result.path, "inventory/device-passport.json").decode("utf-8")
+    )
+    excluded = json.loads(
+        archive.read_member(result.path, "inventory/excluded.json").decode("utf-8")
+    )
+    metadata_strings = capability_messages(capabilities_snapshot)
+    metadata_strings += capability_messages(serialized_capabilities)
+    metadata_strings += passport.get("warnings", [])
+    metadata_strings += passport["tools"]["sysupgrade"].get("notes", [])
+    metadata_strings += [item["reason"] for item in excluded if isinstance(item.get("reason"), str)]
+    completeness = result.manifest["completeness"]
+    metadata_strings += completeness.get("warnings", [])
+    metadata_strings += [
+        stage["detail"] for stage in completeness.get("stages", [])
+        if isinstance(stage.get("detail"), str)
+    ]
+    untranslated = [
+        text for text in metadata_strings
+        if i18n.localize_text(text, language="ru") != text
+    ]
+    assert not untranslated, untranslated
+
+
 def test_restore_instructions_present(device, tmp_path, logger):
     dev = device("apk_overlay_x86")
     client, passport, profile, store = _setup(dev, tmp_path)
@@ -427,6 +490,9 @@ def test_restore_instructions_present(device, tmp_path, logger):
     text = archive.read_member(result.path, "meta/restore-instructions.ru.txt").decode("utf-8")
     assert "OpenWrt" in text
     assert "owbm" in text
+    assert "— Русский —" in text
+    assert "— English —" in text
+    assert "Archive contents:" in text
 
 
 def test_temporary_workdir_is_removed(device, tmp_path, logger, monkeypatch):

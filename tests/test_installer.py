@@ -58,15 +58,18 @@ def release_assets(tmp_path):
     return release_dir
 
 
-def run_installer(tmp_path, *, bad_checksum=False):
+def run_installer(tmp_path, *, bad_checksum=False, language="ru_RU.UTF-8"):
     release_dir = release_assets(tmp_path)
     fake_bin = make_fake_wget(tmp_path)
     home = tmp_path / "home"
     home.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
+    env.pop("LC_ALL", None)
+    env.pop("LC_MESSAGES", None)
     env["HOME"] = str(home)
     env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
     env["OWBM_TEST_RELEASE_DIR"] = str(release_dir)
+    env["LANG"] = language
     if bad_checksum:
         env["OWBM_TEST_BAD_CHECKSUM"] = "1"
     return subprocess.run(
@@ -107,6 +110,13 @@ def test_installer_downloads_verifies_and_installs_for_current_user(tmp_path):
     version = subprocess.run([str(installed), "--version"], capture_output=True, text=True, timeout=30)
     assert version.returncode == 0, version.stderr
     assert version.stdout.startswith("owbm ")
+
+
+def test_installer_uses_english_system_locale(tmp_path):
+    result, _home = run_installer(tmp_path, language="en_US.UTF-8")
+    assert result.returncode == 0, result.stderr
+    assert "OWBM installed:" in result.stdout
+    assert "OWBM установлен:" not in result.stdout
 
 
 def test_bad_checksum_does_not_replace_existing_install(tmp_path):
@@ -217,6 +227,8 @@ fi
 
     state_home = tmp_path / "xdg-state"
     env = os.environ.copy()
+    env.pop("LC_ALL", None)
+    env.pop("LC_MESSAGES", None)
     env.update(
         {
             "HOME": str(home),
@@ -229,6 +241,7 @@ fi
             "OWBM_TEST_REAL_PYTHON": sys.executable,
             "OWBM_TEST_REAL_SSH": shutil.which("ssh") or "",
             "OWBM_TEST_RELEASE_DIR": str(release_dir),
+            "LANG": "ru_RU.UTF-8",
         }
     )
     if os_release.startswith("ID=nixos"):
@@ -271,6 +284,17 @@ def test_declining_dependency_install_changes_nothing(tmp_path):
     assert returncode != 0
     assert "установка зависимостей отменена" in output
     assert not package_log.exists()
+
+
+def test_russian_yes_confirms_dependency_install(tmp_path):
+    if os.getuid() == 0:
+        pytest.skip("installer intentionally refuses to run as root")
+    env, home, package_log = dependency_test_env(tmp_path, "ID=debian\nVERSION_ID=12\n")
+    returncode, output = run_in_terminal(env, answer="да")
+    assert returncode == 0, output
+    assert "[д/Н]" in output
+    assert package_log.is_file()
+    assert (home / ".local" / "bin" / "owbm").is_file()
 
 
 def test_unsupported_old_ubuntu_stops_before_package_changes(tmp_path):

@@ -27,6 +27,7 @@ from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 from . import MAX_READABLE_FORMAT_VERSION, FORMAT_VERSION
 from .errors import OwbmError, fail
+from . import i18n
 from .util import sha256_file
 
 MANIFEST_NAME = "manifest.json"
@@ -124,15 +125,15 @@ def bounded_tar_members(tf) -> Iterator[tarfile.TarInfo]:
         name_bytes = len(member.name.encode("utf-8", "replace"))
         path_bytes += name_bytes
         if name_bytes > MAX_TAR_MEMBER_NAME_BYTES:
-            raise fail("OWBM-E-CHK-002", reason="имя элемента вложенного tar превышает 4 КиБ")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("archive.error.tar_name_limit"))
         if member.name.count("/") > MAX_TAR_PATH_DEPTH:
-            raise fail("OWBM-E-CHK-002", reason="путь вложенного tar слишком глубоко вложен")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("archive.error.tar_depth"))
         if count > MAX_TAR_MEMBERS:
-            raise fail("OWBM-E-CHK-002", reason="слишком много элементов во вложенном tar")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("archive.error.tar_count"))
         if total > MAX_TAR_UNCOMPRESSED_BYTES:
-            raise fail("OWBM-E-CHK-002", reason="вложенный tar превышает предел распаковки 64 ГиБ")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("archive.error.tar_size"))
         if path_bytes > MAX_TAR_PATH_BYTES:
-            raise fail("OWBM-E-CHK-002", reason="имена элементов во вложенном tar превышают предел 16 МиБ")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("archive.error.tar_path_bytes"))
         yield member
 
 
@@ -189,7 +190,7 @@ def _zip_index_limits(path: Path) -> None:
             central_size = struct.unpack_from("<Q", record, 40)[0]
             central_end = record_start
     if central_size > MAX_CENTRAL_DIRECTORY_BYTES:
-        raise fail("OWBM-E-CHK-002", reason="индекс элементов архива превышает 64 МиБ")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("archive.error.index_size"))
     central_start = central_end - central_size
     if central_start < 0 or central_end > file_size:
         raise zipfile.BadZipFile("invalid central-directory bounds")
@@ -210,7 +211,7 @@ def _zip_index_limits(path: Path) -> None:
                     raise zipfile.BadZipFile("truncated central-directory entry")
                 name_length, extra_length, comment_length = struct.unpack_from("<HHH", fixed, 28)
                 if name_length > MAX_MEMBER_NAME:
-                    raise fail("OWBM-E-CHK-003", path="<слишком длинное имя элемента>")
+                    raise fail("OWBM-E-CHK-003", path=i18n.tr("archive.error.member_name_too_long"))
                 record_length = 46 + name_length + extra_length + comment_length
                 if record_length > remaining:
                     raise zipfile.BadZipFile("central-directory entry exceeds directory bounds")
@@ -220,7 +221,7 @@ def _zip_index_limits(path: Path) -> None:
                 if actual_entries > MAX_ARCHIVE_MEMBERS:
                     raise fail(
                         "OWBM-E-CHK-002",
-                        reason=f"в архиве слишком много элементов (> {MAX_ARCHIVE_MEMBERS})",
+                        reason=i18n.tr("archive.error.member_count", limit=MAX_ARCHIVE_MEMBERS),
                     )
             elif signature == b"PK\x05\x05":
                 if remaining < 6:
@@ -275,7 +276,7 @@ class Issue:
     detail: str
 
     def __str__(self) -> str:
-        return f"{self.code}: {self.detail}"
+        return f"{self.code}: {i18n.localize_text(self.detail)}"
 
 
 @dataclass
@@ -298,12 +299,12 @@ class VerifyReport:
             issue = self.issues[0]
             context = {"reason": issue.detail}
             if issue.code == "OWBM-E-CHK-003":
-                context = {"path": issue.detail}
+                context = {"path": i18n.localize_text(issue.detail)}
             elif issue.code == "OWBM-E-CHK-004":
                 kind, _, path = issue.detail.partition(": ")
                 context = {"path": path or issue.detail, "kind": kind}
             elif issue.code == "OWBM-E-ARC-001":
-                context = {"path": issue.detail}
+                context = {"path": str(self.path)}
             elif issue.code == "OWBM-E-CHK-001":
                 context = {"member": issue.detail}
             elif issue.code == "OWBM-E-FMT-001":
@@ -318,20 +319,20 @@ class VerifyReport:
 def check_member_name(name: str) -> Optional[str]:
     """Return a reason if the archive member name is unsafe, else None."""
     if not name:
-        return "пустое имя"
+        return i18n.tr("archive.error.name.empty")
     if len(name) > MAX_MEMBER_NAME:
-        return "слишком длинное имя"
+        return i18n.tr("archive.error.name.long")
     if name.startswith("/") or name.startswith("\\"):
-        return "абсолютный путь"
+        return i18n.tr("archive.error.name.absolute")
     if "\\" in name:
-        return "обратный слэш в пути"
+        return i18n.tr("archive.error.name.backslash")
     if "\x00" in name or "\n" in name or "\r" in name or "\t" in name:
-        return "управляющий символ в имени"
+        return i18n.tr("archive.error.name.control")
     parts = name.rstrip("/").split("/")
     if any(part in ("", ".", "..") for part in parts):
-        return "недопустимый компонент пути"
+        return i18n.tr("archive.error.name.component")
     if parts[0] == "checksums" and len(parts) > 2:
-        return "недопустимая глубина в checksums"
+        return i18n.tr("archive.error.name.checksum_depth")
     return None
 
 
@@ -352,7 +353,7 @@ def write_archive(path: Path, members: Iterable[Member], *, compresslevel: int =
             if reason:
                 raise fail("OWBM-E-CHK-003", path=member.name)
             if member.name in names:
-                raise fail("OWBM-E-CHK-002", reason=f"повторяющееся имя элемента {member.name}")
+                raise fail("OWBM-E-CHK-002", reason=i18n.tr("archive.error.duplicate_member", name=member.name))
             names.add(member.name)
             info = zipfile.ZipInfo(member.name, date_time=FIXED_DATE)
             info.compress_type = zipfile.ZIP_DEFLATED if member.compress else zipfile.ZIP_STORED
@@ -373,11 +374,11 @@ def _read_member_bounded(zf: zipfile.ZipFile, name: str, limit: int) -> bytes:
     """Read a small metadata member without trusting its declared size."""
     info = zf.getinfo(name)
     if info.file_size > limit:
-        raise fail("OWBM-E-CHK-002", reason=f"элемент {name} превышает предел {limit} байт")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("archive.error.element_size", name=name, limit=limit))
     with zf.open(info) as stream:
         data = stream.read(limit + 1)
     if len(data) > limit:
-        raise fail("OWBM-E-CHK-002", reason=f"элемент {name} превышает предел {limit} байт")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("archive.error.element_size", name=name, limit=limit))
     return data
 
 
@@ -394,9 +395,9 @@ def read_manifest(path: Path) -> dict:
     try:
         data = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
-        raise fail("OWBM-E-CHK-002", reason="manifest.json не является корректным JSON")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("archive.error.invalid_json"))
     if not isinstance(data, dict):
-        raise fail("OWBM-E-CHK-002", reason="manifest.json имеет неверную структуру")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("archive.error.invalid_manifest"))
     return data
 
 
@@ -408,10 +409,10 @@ def _parse_checksums(text: str) -> Dict[str, str]:
             continue
         parts = line.split(None, 1)
         if len(parts) != 2:
-            raise fail("OWBM-E-CHK-002", reason="строка SHA256SUMS имеет неверный формат")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("archive.error.checksum_line"))
         digest, name = parts[0], parts[1].lstrip("*").strip()
         if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
-            raise fail("OWBM-E-CHK-002", reason="неверная контрольная сумма в SHA256SUMS")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("archive.error.checksum_invalid"))
         result[name] = digest
     return result
 
@@ -421,10 +422,10 @@ def verify_archive(path: Path, *, deep: bool = True, expect_format: int = FORMAT
     path = Path(path)
     report = VerifyReport(path=path)
     if not path.is_file():
-        report.add("OWBM-E-ARC-001", "файл не найден")
+        report.add("OWBM-E-ARC-001", i18n.tr("archive.error.file_missing"))
         return report
     if path.stat().st_size == 0:
-        report.add("OWBM-E-ARC-001", "файл пуст")
+        report.add("OWBM-E-ARC-001", i18n.tr("archive.error.file_empty"))
         return report
 
     try:
@@ -433,7 +434,7 @@ def verify_archive(path: Path, *, deep: bool = True, expect_format: int = FORMAT
         report.add(exc.code, exc.why)
         return report
     except (zipfile.BadZipFile, OSError) as exc:
-        report.add("OWBM-E-ARC-001", f"контейнер не читается ({exc})")
+        report.add("OWBM-E-ARC-001", i18n.tr("archive.error.container", error=exc))
         return report
 
     with zf:
@@ -446,20 +447,20 @@ def verify_archive(path: Path, *, deep: bool = True, expect_format: int = FORMAT
                 report.add("OWBM-E-CHK-003", f"{reason}: {info.filename}")
                 continue
             if not _is_regular(info):
-                report.add("OWBM-E-CHK-004", f"не обычный файл: {info.filename}")
+                report.add("OWBM-E-CHK-004", i18n.tr("archive.error.not_regular", name=info.filename))
             names.append(info.filename)
         if len(set(names)) != len(names):
-            report.add("OWBM-E-CHK-002", "повторяющиеся имена элементов")
+            report.add("OWBM-E-CHK-002", i18n.tr("archive.error.duplicate_names"))
         if report.issues:
             return report
 
         total = sum(info.file_size for info in infos)
         if total > MAX_TOTAL_UNCOMPRESSED:
-            report.add("OWBM-E-CHK-002", f"суммарный объём распаковки превышает предел ({total} байт)")
+            report.add("OWBM-E-CHK-002", i18n.tr("archive.error.unpacked_limit", size=total))
             return report
 
         if MANIFEST_NAME not in names:
-            report.add("OWBM-E-ARC-001", "отсутствует manifest.json")
+            report.add("OWBM-E-ARC-001", i18n.tr("archive.error.no_manifest"))
             return report
 
         try:
@@ -469,19 +470,19 @@ def verify_archive(path: Path, *, deep: bool = True, expect_format: int = FORMAT
             report.add(exc.code, exc.why)
             return report
         except (UnicodeDecodeError, ValueError):
-            report.add("OWBM-E-CHK-002", "manifest.json не является корректным JSON")
+            report.add("OWBM-E-CHK-002", i18n.tr("archive.error.invalid_json"))
             return report
         if not isinstance(manifest, dict):
-            report.add("OWBM-E-CHK-002", "manifest.json имеет неверную структуру")
+            report.add("OWBM-E-CHK-002", i18n.tr("archive.error.invalid_manifest"))
             return report
         report.manifest = manifest
 
         version = manifest.get("format_version")
         if not isinstance(version, int) or version < 1:
-            report.add("OWBM-E-CHK-002", "в манифесте нет корректной версии формата")
+            report.add("OWBM-E-CHK-002", i18n.tr("archive.error.format_version"))
             return report
         if manifest.get("format") != "owbm":
-            report.add("OWBM-E-ARC-001", "манифест принадлежит другому формату")
+            report.add("OWBM-E-ARC-001", i18n.tr("archive.error.other_format"))
             return report
         supported = min(MAX_READABLE_FORMAT_VERSION, max(expect_format, 1))
         if version > supported:
@@ -489,7 +490,7 @@ def verify_archive(path: Path, *, deep: bool = True, expect_format: int = FORMAT
             return report
 
         if CHECKSUMS_NAME not in names:
-            report.add("OWBM-E-CHK-002", "отсутствует checksums/SHA256SUMS")
+            report.add("OWBM-E-CHK-002", i18n.tr("archive.error.checksums_missing"))
             return report
         try:
             checksum_raw = _read_member_bounded(zf, CHECKSUMS_NAME, MAX_CHECKSUMS_BYTES)
@@ -498,16 +499,16 @@ def verify_archive(path: Path, *, deep: bool = True, expect_format: int = FORMAT
             report.add(exc.code, exc.why)
             return report
         except UnicodeDecodeError:
-            report.add("OWBM-E-CHK-002", "checksums/SHA256SUMS не читается")
+            report.add("OWBM-E-CHK-002", i18n.tr("archive.error.checksums_unreadable"))
             return report
 
         covered = set(checksums) | {CHECKSUMS_NAME}
         missing = [name for name in names if name not in covered]
         if missing:
-            report.add("OWBM-E-CHK-002", f"элемент без контрольной суммы: {missing[0]}")
+            report.add("OWBM-E-CHK-002", i18n.tr("archive.error.member_without_checksum", name=missing[0]))
         unknown = [name for name in checksums if name not in names]
         if unknown:
-            report.add("OWBM-E-CHK-002", f"контрольная сумма для отсутствующего элемента: {unknown[0]}")
+            report.add("OWBM-E-CHK-002", i18n.tr("archive.error.checksum_without_member", name=unknown[0]))
 
         if not deep:
             return report
@@ -555,6 +556,6 @@ def read_member(path: Path, name: str) -> bytes:
         with open_zip(path) as zf:
             return _read_member_bounded(zf, name, MAX_METADATA_MEMBER_BYTES)
     except KeyError:
-        raise fail("OWBM-E-CHK-002", reason=f"в архиве нет элемента {name}")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("archive.error.member_missing", name=name))
     except (zipfile.BadZipFile, OSError) as exc:
         raise fail("OWBM-E-ARC-001", path=str(path), reason=str(exc))

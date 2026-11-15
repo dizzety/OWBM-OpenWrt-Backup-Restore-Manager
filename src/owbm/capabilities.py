@@ -12,17 +12,18 @@ from typing import Dict, List, Tuple
 
 from .adapters import filesystem
 from .discovery import DevicePassport
+from . import i18n
 
 LEVEL_EXACT = "exact"
 LEVEL_CONFIG = "config"
 LEVEL_INVENTORY = "inventory-only"
 LEVEL_UNSUPPORTED = "unsupported"
 
-_LEVEL_TITLES = {
-    LEVEL_EXACT: "точное восстановление",
-    LEVEL_CONFIG: "восстановление конфигурации",
-    LEVEL_INVENTORY: "только список (переустановка из репозиториев)",
-    LEVEL_UNSUPPORTED: "не поддерживается",
+_LEVEL_TITLE_KEYS = {
+    LEVEL_EXACT: "cap.level.exact",
+    LEVEL_CONFIG: "cap.level.config",
+    LEVEL_INVENTORY: "cap.level.inventory",
+    LEVEL_UNSUPPORTED: "cap.level.unsupported",
 }
 
 
@@ -37,7 +38,8 @@ class Support:
 
     @property
     def title(self) -> str:
-        return _LEVEL_TITLES.get(self.level, self.level)
+        key = _LEVEL_TITLE_KEYS.get(self.level)
+        return i18n.tr(key) if key else self.level
 
     def as_dict(self) -> Dict[str, str]:
         return {"level": self.level, "reason": self.reason, "title": self.title}
@@ -92,23 +94,23 @@ def analyze(passport: DevicePassport) -> CapabilityProfile:
     warnings: List[str] = list(passport.warnings)
     notes: List[str] = []
 
-    fs_desc = filesystem.describe(storage.root_fstype) if storage.root_fstype else "тип ФС не определён"
+    fs_desc = filesystem.describe(storage.root_fstype) if storage.root_fstype else i18n.tr("cap.fs.unknown")
 
     # --- configuration ----------------------------------------------------
     if passport.tools.sysupgrade.available and passport.tools.sysupgrade.supports_backup:
         configuration = Support(
             LEVEL_EXACT,
-            "Нативная резервная копия OpenWrt (sysupgrade -b) сохранит конфигурацию по правилам самого устройства.",
+            i18n.tr("cap.config.native"),
         )
     elif packages.manager != "none":
         configuration = Support(
             LEVEL_CONFIG,
-            "sysupgrade -b недоступен: конфигурация будет собрана из /etc/config и /etc вручную.",
+            i18n.tr("cap.config.manual"),
         )
     else:
         configuration = Support(
             LEVEL_UNSUPPORTED,
-            "Не найдены ни sysupgrade, ни каталог /etc/config: сохранять конфигурацию не из чего.",
+            i18n.tr("cap.config.unsupported"),
         )
 
     # --- overlay / writable layer ----------------------------------------
@@ -117,120 +119,111 @@ def analyze(passport: DevicePassport) -> CapabilityProfile:
         if overlay.persistent:
             overlay_upper = Support(
                 LEVEL_EXACT,
-                f"Записываемый слой OverlayFS найден: {overlay.upperdir} ({filesystem.describe(overlay.upper_fstype)}).",
+                i18n.tr("cap.overlay.persistent", path=overlay.upperdir,
+                        filesystem=filesystem.describe(overlay.upper_fstype)),
             )
         elif overlay.upper_fstype:
             overlay_upper = Support(
                 LEVEL_CONFIG,
-                "Записываемый слой находится в памяти ("
-                + filesystem.describe(overlay.upper_fstype)
-                + "): он не переживает перезагрузку, поэтому снимок не отражает постоянное состояние.",
+                i18n.tr("cap.overlay.memory", filesystem=filesystem.describe(overlay.upper_fstype)),
             )
         else:
             overlay_upper = Support(
                 LEVEL_CONFIG,
-                "Записываемый слой OverlayFS найден, но его файловая система не определена.",
+                i18n.tr("cap.overlay.unknown_fs"),
             )
     elif storage.extroot:
         overlay_upper = Support(
             LEVEL_EXACT,
-            "Используется extroot: пользовательские данные находятся на постоянном носителе и доступны для копирования.",
+            i18n.tr("cap.overlay.extroot"),
         )
     elif storage.root_fstype and filesystem.is_persistent(storage.root_fstype):
         overlay_upper = Support(
             LEVEL_CONFIG,
-            f"OverlayFS не используется, корень — {fs_desc}. "
-            "Отдельного записываемого слоя нет: сохраняются конфигурация, список пакетов и "
-            "явно выбранные каталоги; файлы системы целиком не копируются.",
+            i18n.tr("cap.overlay.no_layer", filesystem=fs_desc),
         )
     else:
         overlay_upper = Support(
             LEVEL_UNSUPPORTED,
-            f"OverlayFS не обнаружен, корневая ФС — {fs_desc}. "
-            "Точное восстановление системного состояния на этой схеме хранения невозможно.",
+            i18n.tr("cap.overlay.restore_unsupported", filesystem=fs_desc),
         )
         notes.append(
-            "Отсутствие /overlay/upper само по себе не является ошибкой: конфигурация и список пакетов сохраняются."
+            i18n.tr("cap.overlay.missing_note")
         )
 
     # --- root filesystem (devices without OverlayFS) ----------------------
     if overlay is not None and overlay.upperdir:
         rootfs = Support(
             LEVEL_UNSUPPORTED,
-            "Не требуется: изменения хранятся в записываемом слое OverlayFS.",
+            i18n.tr("cap.rootfs.not_needed"),
         )
     elif storage.writable_persistent and storage.root_fstype and filesystem.is_persistent(storage.root_fstype):
         rootfs = Support(
             LEVEL_EXACT,
-            f"Корневая ФС — {fs_desc}: копируется целиком, кроме /proc, /sys, /dev, /tmp, /boot "
-            "и других точек монтирования.",
+            i18n.tr("cap.rootfs.copy", filesystem=fs_desc),
         )
     else:
         rootfs = Support(
             LEVEL_UNSUPPORTED,
-            "Постоянной корневой ФС для копирования не найдено.",
+            i18n.tr("cap.rootfs.none"),
         )
 
     # --- packages ---------------------------------------------------------
     if packages.manager == "none":
-        packages_inventory = Support(LEVEL_UNSUPPORTED, "Пакетный менеджер не обнаружен.")
-        packages_binaries = Support(LEVEL_UNSUPPORTED, "Пакетный менеджер не обнаружен.")
+        packages_inventory = Support(LEVEL_UNSUPPORTED, i18n.tr("cap.packages.manager_missing"))
+        packages_binaries = Support(LEVEL_UNSUPPORTED, i18n.tr("cap.packages.manager_missing"))
     else:
         manager_title = "APK" if packages.manager == "apk" else "OPKG"
         if packages.count:
             packages_inventory = Support(
                 LEVEL_EXACT,
-                f"{manager_title}: прочитан список из {packages.count} пакетов с версиями и архитектурой.",
+                i18n.tr("cap.packages.inventory", manager=manager_title, count=packages.count),
             )
         else:
             packages_inventory = Support(
                 LEVEL_INVENTORY,
-                f"{manager_title} найден, но список установленных пакетов пуст или недоступен для чтения.",
+                i18n.tr("cap.packages.inventory_empty", manager=manager_title),
             )
         if packages.repositories:
             packages_binaries = Support(
                 LEVEL_EXACT,
-                f"{manager_title}: доступны {len(packages.repositories)} источника пакетов — "
-                "бинарные пакеты можно сохранить для восстановления без интернета.",
+                i18n.tr("cap.packages.binaries", manager=manager_title, count=len(packages.repositories)),
             )
         else:
             packages_binaries = Support(
                 LEVEL_INVENTORY,
-                f"{manager_title}: репозитории не настроены, бинарные пакеты сохранить неоткуда. "
-                "Восстановление будет требовать доступа к репозиториям.",
+                i18n.tr("cap.packages.repositories_missing", manager=manager_title),
             )
 
     # --- user data --------------------------------------------------------
     if storage.writable_persistent:
         user_data = Support(
             LEVEL_EXACT,
-            "Есть постоянное записываемое хранилище: пользовательские каталоги сохраняются как есть.",
+            i18n.tr("cap.userdata.persistent"),
         )
         application_data = Support(
             LEVEL_EXACT,
-            "Каталоги приложений на постоянном хранилище сохраняются; их список показывается до начала работы.",
+            i18n.tr("cap.appdata.persistent"),
         )
         system_state = Support(
             LEVEL_CONFIG,
-            "Пользовательские скрипты, службы и автозапуск сохраняются. "
-            "Драйверы, модули ядра и системные бинарники не переносятся.",
+            i18n.tr("cap.systemstate.persistent"),
         )
     else:
         user_data = Support(
             LEVEL_CONFIG,
-            "Постоянного записываемого хранилища не найдено: пользовательские файлы могут отсутствовать.",
+            i18n.tr("cap.userdata.missing"),
         )
-        application_data = Support(LEVEL_CONFIG, "Данные приложений могут отсутствовать по той же причине.")
-        system_state = Support(LEVEL_UNSUPPORTED, "Нет постоянного хранилища для пользовательских скриптов и служб.")
+        application_data = Support(LEVEL_CONFIG, i18n.tr("cap.appdata.missing"))
+        system_state = Support(LEVEL_UNSUPPORTED, i18n.tr("cap.systemstate.missing"))
 
     if identity.arch and packages.arch_mismatch:
         notes.append(
-            "В системе есть пакеты с архитектурой, отличной от системной: при восстановлении "
-            "они будут перечислены отдельно."
+            i18n.tr("cap.packages.arch_mismatch")
         )
 
     if not passport.tools.sysupgrade.supports_restore:
-        notes.append("sysupgrade -r недоступен: восстановление конфигурации будет выполняться пофайлово.")
+        notes.append(i18n.tr("cap.config.restore_filewise"))
 
     exact = bool(
         configuration.level == LEVEL_EXACT
@@ -268,30 +261,29 @@ def narrative(passport: DevicePassport, profile: CapabilityProfile) -> str:
     storage = passport.storage
     parts: List[str] = []
     if identity.system_type == "openwrt":
-        parts.append(f"OpenWrt обнаружен: {identity.board_name or identity.model or 'модель неизвестна'}"
-                     + (f", {identity.release}" if identity.release else ""))
+        model = identity.board_name or identity.model or i18n.tr("cap.narrative.model_unknown")
+        release = f", {identity.release}" if identity.release else ""
+        parts.append(i18n.tr("cap.narrative.openwrt", model=model, release=release))
     else:
-        parts.append("OpenWrt не обнаружен")
+        parts.append(i18n.tr("cap.narrative.openwrt_missing"))
     manager = passport.packages.manager
     if manager == "apk":
-        parts.append("APK доступен")
+        parts.append(i18n.tr("cap.narrative.apk"))
     elif manager == "opkg":
-        parts.append("OPKG доступен")
+        parts.append(i18n.tr("cap.narrative.opkg"))
     else:
-        parts.append("пакетный менеджер не обнаружен")
+        parts.append(i18n.tr("cap.narrative.manager_missing"))
     if profile.rootfs.level == LEVEL_EXACT:
-        parts.append("корневая ФС копируется целиком")
+        parts.append(i18n.tr("cap.narrative.rootfs"))
     if storage.overlay and storage.overlay.upperdir:
-        parts.append(
-            "OverlayFS обнаружен"
-            + ("" if storage.overlay.persistent else " (но записываемый слой в памяти)")
-        )
+        parts.append(i18n.tr("cap.narrative.overlay" if storage.overlay.persistent
+                             else "cap.narrative.overlay_memory"))
     else:
-        parts.append("OverlayFS не обнаружен")
+        parts.append(i18n.tr("cap.narrative.overlay_missing"))
     if profile.configuration.usable:
-        parts.append("конфигурацию сохранить можно")
+        parts.append(i18n.tr("cap.narrative.config_available"))
     if profile.packages_inventory.usable:
-        parts.append("список пакетов сохранить можно")
+        parts.append(i18n.tr("cap.narrative.packages_available"))
     if not profile.exact_restore:
-        parts.append("точное восстановление системного состояния на этой файловой системе не поддерживается")
+        parts.append(i18n.tr("cap.narrative.exact_unsupported"))
     return ". ".join(parts) + "."

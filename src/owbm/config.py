@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from . import tomlmini
 from .errors import fail
+from . import i18n
 from .util import ensure_dir, looks_like_address
 
 LANGUAGES = ("ru", "en")
@@ -123,7 +124,7 @@ class Config:
         if name_or_host in self.devices:
             profile = self.devices[name_or_host]
             if not profile.host:
-                raise fail("OWBM-E-CFG-002", key=f"devices.{name_or_host}.host", reason="адрес не задан")
+                raise fail("OWBM-E-CFG-002", key=f"devices.{name_or_host}.host", reason=i18n.tr("config.reason.address_missing"))
             return profile
         if looks_like_address(name_or_host):
             return DeviceProfile(name=name_or_host, host=name_or_host)
@@ -135,9 +136,9 @@ class Config:
 
 def _as_int(value: Any, key: str, low: int, high: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise fail("OWBM-E-CFG-002", key=key, reason=f"ожидалось целое число, получено {value!r}")
+        raise fail("OWBM-E-CFG-002", key=key, reason=i18n.tr("config.reason.integer_expected", value=value))
     if not low <= value <= high:
-        raise fail("OWBM-E-CFG-002", key=key, reason=f"допустимый диапазон {low}..{high}")
+        raise fail("OWBM-E-CFG-002", key=key, reason=i18n.tr("config.reason.range", low=low, high=high))
     return value
 
 
@@ -145,7 +146,7 @@ def _as_str(value: Any, key: str) -> str:
     if value is None:
         return ""
     if not isinstance(value, str):
-        raise fail("OWBM-E-CFG-002", key=key, reason=f"ожидалась строка, получено {type(value).__name__}")
+        raise fail("OWBM-E-CFG-002", key=key, reason=i18n.tr("config.reason.string_expected", type=type(value).__name__))
     return value
 
 
@@ -155,15 +156,15 @@ def from_mapping(data: Dict[str, Any], paths: Optional[Paths] = None) -> Config:
 
     general = data.get("general", {}) or {}
     if not isinstance(general, dict):
-        raise fail("OWBM-E-CFG-002", key="general", reason="ожидалась таблица")
+        raise fail("OWBM-E-CFG-002", key="general", reason=i18n.tr("config.reason.table_expected"))
     cfg.general.language = _as_str(general.get("language", cfg.general.language), "general.language") or "ru"
     if cfg.general.language not in LANGUAGES:
-        raise fail("OWBM-E-CFG-002", key="general.language", reason=f"допустимо: {', '.join(LANGUAGES)}")
+        raise fail("OWBM-E-CFG-002", key="general.language", reason=i18n.tr("config.reason.language_allowed", languages=', '.join(LANGUAGES)))
     cfg.general.backup_root = _as_str(general.get("backup_root", ""), "general.backup_root")
     if cfg.general.backup_root:
         cfg.general.backup_root = os.path.expanduser(cfg.general.backup_root)
         if not os.path.isabs(cfg.general.backup_root):
-            raise fail("OWBM-E-CFG-002", key="general.backup_root", reason="нужен абсолютный путь или ~")
+            raise fail("OWBM-E-CFG-002", key="general.backup_root", reason=i18n.tr("config.reason.absolute_path"))
     if "lock_timeout" in general:
         cfg.general.lock_timeout = _as_int(general["lock_timeout"], "general.lock_timeout", 0, 3600)
     if "keep_pre_restore" in general:
@@ -171,7 +172,7 @@ def from_mapping(data: Dict[str, Any], paths: Optional[Paths] = None) -> Config:
 
     ssh = data.get("ssh", {}) or {}
     if not isinstance(ssh, dict):
-        raise fail("OWBM-E-CFG-002", key="ssh", reason="ожидалась таблица")
+        raise fail("OWBM-E-CFG-002", key="ssh", reason=i18n.tr("config.reason.table_expected"))
     cfg.ssh.user = _as_str(ssh.get("user", cfg.ssh.user), "ssh.user") or "root"
     if "port" in ssh:
         cfg.ssh.port = _as_int(ssh["port"], "ssh.port", 1, 65535)
@@ -182,15 +183,15 @@ def from_mapping(data: Dict[str, Any], paths: Optional[Paths] = None) -> Config:
         cfg.ssh.connect_timeout = _as_int(ssh["connect_timeout"], "ssh.connect_timeout", 1, 600)
     policy = _as_str(ssh.get("host_key_policy", cfg.ssh.host_key_policy), "ssh.host_key_policy") or "ask"
     if policy not in HOST_KEY_POLICIES:
-        raise fail("OWBM-E-CFG-002", key="ssh.host_key_policy", reason=f"допустимо: {', '.join(HOST_KEY_POLICIES)}")
+        raise fail("OWBM-E-CFG-002", key="ssh.host_key_policy", reason=i18n.tr("config.reason.host_key_policy", policies=', '.join(HOST_KEY_POLICIES)))
     cfg.ssh.host_key_policy = policy
 
     devices = data.get("devices", {}) or {}
     if not isinstance(devices, dict):
-        raise fail("OWBM-E-CFG-002", key="devices", reason="ожидалась таблица")
+        raise fail("OWBM-E-CFG-002", key="devices", reason=i18n.tr("config.reason.table_expected"))
     for name, raw in devices.items():
         if not isinstance(raw, dict):
-            raise fail("OWBM-E-CFG-002", key=f"devices.{name}", reason="ожидалась таблица")
+            raise fail("OWBM-E-CFG-002", key=f"devices.{name}", reason=i18n.tr("config.reason.table_expected"))
         profile = DeviceProfile(name=name)
         profile.host = _as_str(raw.get("host", ""), f"devices.{name}.host")
         if "user" in raw:
@@ -218,8 +219,10 @@ def load(path: Optional[Path] = None, paths: Optional[Paths] = None) -> Config:
     try:
         with open(target, "r", encoding="utf-8") as handle:
             text = handle.read()
+    except UnicodeError:
+        raise fail("OWBM-E-CFG-001", path=str(target), reason=i18n.tr("config.reason.invalid_encoding"))
     except OSError as exc:
-        raise fail("OWBM-E-CFG-001", path=str(target), reason=exc.strerror or "нет доступа")
+        raise fail("OWBM-E-CFG-001", path=str(target), reason=exc.strerror or i18n.tr("config.reason.path_missing"))
     try:
         data = tomlmini.loads(text)
     except ValueError as exc:
@@ -312,3 +315,41 @@ host_key_policy = "ask"
 host = "192.0.2.1"
 label = "мой роутер"
 """
+
+EXAMPLE_EN = """# OWBM configuration example.
+# Copy this file to $XDG_CONFIG_HOME/owbm/config.toml and edit it.
+# This file is optional; OWBM works without it.
+
+[general]
+# Interface language: ru or en
+language = "ru"
+# Backup storage directory. Empty = $XDG_DATA_HOME/owbm/backups
+backup_root = ""
+# Seconds to wait for the storage lock
+lock_timeout = 30
+# Number of pre-restore snapshots to keep (0 = never delete automatically)
+keep_pre_restore = 5
+
+[ssh]
+# Use an SSH key or agent. Passwords are requested interactively and never stored.
+user = "root"
+port = 22
+identity_file = ""
+proxy_jump = ""
+# Empty = $XDG_STATE_HOME/owbm/known_hosts
+known_hosts = ""
+connect_timeout = 10
+# ask    — confirm the fingerprint on first connection
+# strict — reject any unknown fingerprint
+host_key_policy = "ask"
+
+# Device profile name is used with --device <name>.
+# This address is an RFC 5737 documentation example; replace it with your own.
+[devices.example]
+host = "192.0.2.1"
+label = "my router"
+"""
+
+
+def example_text(language: Optional[str] = None) -> str:
+    return EXAMPLE_EN if (language or i18n.get_language()) == "en" else EXAMPLE

@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TextIO
 
+from . import i18n
+
 _REDACT_RULES = (
     re.compile(
         r"(?i)\b(password|passwd|passphrase|psk|secret|token|api[_-]?key|private[_-]?key)\b"
@@ -28,7 +30,7 @@ def redact(text: str) -> str:
     if not text:
         return text
     result = _REDACT_RULES[0].sub(lambda m: f"{m.group(1)}{m.group(2)}***", text)
-    result = _REDACT_RULES[1].sub("[приватный ключ скрыт]", result)
+    result = _REDACT_RULES[1].sub(i18n.tr("log.redaction.private_key"), result)
     result = _REDACT_RULES[2].sub(lambda m: f"{m.group(1)} AAAA***", result)
     return result
 

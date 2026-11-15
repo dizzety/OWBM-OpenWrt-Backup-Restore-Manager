@@ -12,6 +12,8 @@ class ScriptedIO(menu.ConsoleIO):
     def __init__(self, script):
         self.script = list(script)
         self.out = []
+        self.prompts = []
+        self.choices = []
 
     def say(self, message: str = "") -> None:
         self.out.append(str(message))
@@ -22,6 +24,7 @@ class ScriptedIO(menu.ConsoleIO):
         return self.script.pop(0)
 
     def ask(self, prompt: str, default: str = "") -> str:
+        self.prompts.append(prompt)
         value = self._next()
         return value if value != "" else default
 
@@ -35,6 +38,7 @@ class ScriptedIO(menu.ConsoleIO):
         return self._next()
 
     def choose(self, title: str, options, back: bool = True) -> int:
+        self.choices.append((title, list(options)))
         raw = self._next()
         try:
             number = int(raw)
@@ -79,6 +83,29 @@ def test_menu_exits_on_nine(isolated, capsys):
     assert instance.run() == 0
     assert "До свидания" in io.text()
     assert "Хранилище:" in io.text()
+
+
+def test_menu_uses_configured_english(isolated):
+    from owbm import config as cfgmod
+
+    cfg = cfgmod.load()
+    cfg.general.language = "en"
+    cfgmod.save(cfg)
+    instance, io = _menu(["9"])
+    assert instance.run() == 0
+    assert any(title == "Main menu:" for title, _ in io.choices)
+    assert "Goodbye." in io.text()
+
+
+def test_menu_language_change_applies_and_persists(isolated):
+    instance, io = _menu(["7", "4", "en", "0", "9"])
+    assert instance.run() == 0
+    text = io.text()
+    assert "  4. Language: en" in text
+    assert any(prompt == "Язык (ru/en)" for prompt in io.prompts)
+    assert any(title == "Main menu:" for title, _ in io.choices)
+    saved = isolated / "config" / "owbm" / "config.toml"
+    assert 'language = "en"' in saved.read_text(encoding="utf-8")
 
 
 def test_menu_list_is_empty(isolated, capsys):
@@ -190,8 +217,9 @@ def test_cli_menu_command(isolated, monkeypatch):
     called = {}
 
     class FakeMenu:
-        def run(self):
+        def run(self, language_override=None):
             called["yes"] = True
+            called["language_override"] = language_override
             return 0
 
     monkeypatch.setattr(menu, "Menu", FakeMenu)

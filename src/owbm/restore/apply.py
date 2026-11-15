@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from .. import archive
+from .. import archive, i18n
 from ..backup import collector, packager
 from ..discovery import DevicePassport
 from ..errors import OwbmError, fail
@@ -105,7 +105,7 @@ def apply_plan(ctx: ApplyContext, plan: RestorePlan) -> ApplyResult:
             _dispatch(ctx, plan, step.id, step, state)
         except OwbmError as exc:
             if _recover_host_key(ctx, step.id, state, exc):
-                ctx.logger.warn(f"Шаг «{step.title}» повторяется после обновления ключа устройства.")
+                ctx.logger.warn(i18n.tr("restore.apply.step_retry", title=step.title))
                 journal.ok(f"{step.id}-key-rotated")
                 _dispatch(ctx, plan, step.id, step, state)
                 journal.ok(step.id)
@@ -117,18 +117,12 @@ def apply_plan(ctx: ApplyContext, plan: RestorePlan) -> ApplyResult:
             result.armed = bool(state.get("armed"))
             result.messages.append(exc.render())
             if _rollback_configuration(ctx, state, journal):
-                result.messages.append(
-                    "Конфигурация устройства возвращена к снимку pre-restore: "
-                    "сетевые настройки, firewall и dropbear — прежние."
-                )
+                result.messages.append(i18n.tr("restore.apply.rollback_snapshot"))
             if result.armed:
-                result.messages.append(
-                    "Сторожевой процесс оставлен включённым: если устройство не вернётся "
-                    "к прежней сети само, он восстановит её и перезагрузит устройство."
-                )
+                result.messages.append(i18n.tr("restore.apply.watchdog_armed_failure"))
             return result
         except (BrokenPipeError, ConnectionError, OSError) as exc:
-            journal.fail(step.id, f"соединение прервано: {exc}")
+            journal.fail(step.id, i18n.tr("restore.apply.connection_interrupted", error=exc))
             result.status = STATUS_FAILED
             result.failed = step.id
             result.armed = bool(state.get("armed"))
@@ -136,18 +130,13 @@ def apply_plan(ctx: ApplyContext, plan: RestorePlan) -> ApplyResult:
                 fail(
                     "OWBM-E-RST-001",
                     step=step.id,
-                    reason="соединение с устройством прервано во время передачи данных",
+                    reason=i18n.tr("restore.apply.transfer_interrupted"),
                 ).render()
             )
             if _rollback_configuration(ctx, state, journal):
-                result.messages.append(
-                    "Конфигурация устройства возвращена к снимку pre-restore."
-                )
+                result.messages.append(i18n.tr("restore.apply.rollback_restored"))
             if result.armed:
-                result.messages.append(
-                    "Сторожевой процесс оставлен включённым: если связь не подтвердится, "
-                    "устройство вернётся к прежней сети и перезагрузится."
-                )
+                result.messages.append(i18n.tr("restore.apply.watchdog_unconfirmed"))
             return result
         except Exception as exc:  # noqa: BLE001 - report, never pretend
             journal.fail(step.id, str(exc))
@@ -163,7 +152,7 @@ def apply_plan(ctx: ApplyContext, plan: RestorePlan) -> ApplyResult:
     if install and not install[0]:
         result.status = STATUS_PARTIAL
         result.messages.append(
-            f"Пакеты не установлены полностью: {install[1]}. Файлы лежат в {PACKAGE_STAGE_DIR}."
+            i18n.tr("restore.apply.partial_packages", detail=install[1], path=PACKAGE_STAGE_DIR)
         )
     return result
 
@@ -187,10 +176,10 @@ def _rollback_configuration(ctx: ApplyContext, state: Dict[str, object], journal
         journal.ok("rollback-configuration", str(snapshot))
     except Exception as exc:  # noqa: BLE001 - rollback is best effort, never hides the failure
         journal.fail("rollback-configuration", str(exc))
-        ctx.logger.warn(f"Не удалось вернуть конфигурацию автоматически: {exc}")
+        ctx.logger.warn(i18n.tr("restore.apply.rollback_failed", error=exc))
         return False
     state["configuration_applied"] = False
-    ctx.logger.warn("Конфигурация возвращена к снимку pre-restore.")
+    ctx.logger.warn(i18n.tr("restore.apply.rollback_complete"))
     return True
 
 
@@ -221,24 +210,21 @@ def _recover_host_key(ctx: ApplyContext, step_id: str, state: Dict[str, object],
         return False
     before = client.known_host_fingerprints()
     ui.say("")
-    ui.say(f"SSH-ключ {client.target.host}:{client.target.port} изменился во время восстановления.")
+    ui.say(i18n.tr("restore.apply.key_changed", host=client.target.host, port=client.target.port))
     if before:
-        ui.say("Сохранённые отпечатки: " + ", ".join(before))
-    ui.say("Новые отпечатки:")
+        ui.say(i18n.tr("restore.apply.saved_fingerprints", items=', '.join(before)))
+    ui.say(i18n.tr("restore.apply.new_fingerprints"))
     for key_type, fingerprint in fingerprints:
         ui.say(f"  {key_type}: {fingerprint}")
-    ui.say("Сверьте все отпечатки с консолью устройства или другим доверенным источником.")
-    if not ui.ask_yes_no("Все отпечатки проверены и совпадают?", default=False):
+    ui.say(i18n.tr("restore.apply.verify_key"))
+    if not ui.ask_yes_no(i18n.tr("restore.apply.confirm_key"), default=False):
         return False
 
     try:
         info = client.repin_host_key(keys=keys)
     except OwbmError:
         return False
-    ctx.logger.warn(
-        "Новый SSH-ключ принят после явной ручной сверки отпечатка "
-        f"{info['fingerprint']}; подключение будет повторено."
-    )
+    ctx.logger.warn(i18n.tr("restore.apply.key_accepted", fingerprint=info['fingerprint']))
     return True
 
 
@@ -251,12 +237,12 @@ def _dispatch(ctx: ApplyContext, plan: RestorePlan, step_id: str, step, state: D
         return
     handler = _HANDLERS.get(step_id)
     if handler is None:
-        raise fail("OWBM-E-RST-001", step=step_id, reason="шаг не реализован")
+        raise fail("OWBM-E-RST-001", step=step_id, reason=i18n.tr("restore.apply.not_implemented"))
     handler(ctx, plan, state)
 
 
 def _pre_restore(ctx: ApplyContext, plan: RestorePlan, state: Dict[str, object]) -> None:
-    ctx.logger.info("Создаётся резервная копия целевого устройства…")
+    ctx.logger.info(i18n.tr("restore.apply.backup_target"))
     result = packager.create_backup(
         ctx.client,
         ctx.passport,
@@ -266,9 +252,9 @@ def _pre_restore(ctx: ApplyContext, plan: RestorePlan, state: Dict[str, object])
         ctx.logger,
     )
     if not result.ok:
-        raise fail("OWBM-E-RST-001", step="pre-restore", reason="снимок целевого устройства не создан")
+        raise fail("OWBM-E-RST-001", step="pre-restore", reason=i18n.tr("restore.apply.snapshot_not_created"))
     state["pre_restore_path"] = result.path
-    ctx.logger.ok(f"Снимок цели: {result.path}")
+    ctx.logger.ok(i18n.tr("restore.apply.snapshot_label", path=result.path))
 
 
 def _stage(ctx: ApplyContext, plan: RestorePlan, state: Dict[str, object]) -> None:
@@ -278,10 +264,7 @@ def _stage(ctx: ApplyContext, plan: RestorePlan, state: Dict[str, object]) -> No
 def _arm(ctx: ApplyContext, plan: RestorePlan, state: Dict[str, object]) -> None:
     rollback.arm(ctx.client, root=ctx.root, timeout=ctx.options.watchdog_timeout)
     state["armed"] = True
-    ctx.logger.info(
-        f"Сторож включён: если связь не подтвердится за {ctx.options.watchdog_timeout} с, "
-        "устройство вернётся к прежним сетевым настройкам."
-    )
+    ctx.logger.info(i18n.tr("restore.apply.watchdog_enabled", timeout=ctx.options.watchdog_timeout))
 
 
 PACKAGE_STAGE_DIR = "/tmp/owbm-packages"
@@ -312,17 +295,17 @@ def _install_packages(ctx: ApplyContext, stage: str, manager: str) -> Tuple[bool
     result = ctx.client.run(script, timeout=900, allow_failure=True)
     output = result.out
     if "NOFILES=1" in output:
-        return True, "в архиве нет файлов пакетов"
+        return True, i18n.tr("restore.apply.no_package_files")
     if "INSTALL=ok" in output:
         return True, ""
     detail = " ".join(line for line in output.splitlines() if line.strip() and "INSTALL=" not in line)[-300:]
-    return False, detail or "установщик пакетов завершился с ошибкой"
+    return False, detail or i18n.tr("restore.apply.package_installer_failed")
 
 
 def _apply_component(ctx: ApplyContext, component_id: str, applied=None, state=None) -> None:
     component = ctx.parsed.component(component_id)
     if component is None:
-        raise fail("OWBM-E-CHK-002", reason=f"в архиве нет компонента {component_id}")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("restore.apply.component_missing", component=component_id))
     applied = applied or set()
 
     if component_id == "packages_binaries":
@@ -331,7 +314,8 @@ def _apply_component(ctx: ApplyContext, component_id: str, applied=None, state=N
 
     payload = archive.extract_member(ctx.archive_path, component.path, ctx.workdir)
     members, _size = collector.inspect_tar(payload)
-    ctx.logger.debug(f"{component_id}: {members} элементов, {human_size(payload.stat().st_size)}")
+    ctx.logger.debug(i18n.tr("restore.apply.member_count", component=component_id,
+                              count=members, size=human_size(payload.stat().st_size)))
 
     command = "tar -xzpf - -C " + shlex.quote(ctx.dest())
     send_file(ctx.client, command, payload)
@@ -347,9 +331,7 @@ def _apply_packages(ctx: ApplyContext, component, applied, state) -> None:
     archives are only a fallback for devices restored without a filesystem copy.
     """
     if applied & {"rootfs", "overlay_upper"}:
-        ctx.logger.info(
-            "Файлы пакетов уже восстановлены вместе с системой — отдельная распаковка не нужна."
-        )
+        ctx.logger.info(i18n.tr("restore.apply.packages_in_system"))
         return
     payload = archive.extract_member(ctx.archive_path, component.path, ctx.workdir)
     members, _size = collector.inspect_tar(payload)
@@ -362,25 +344,25 @@ def _apply_packages(ctx: ApplyContext, component, applied, state) -> None:
         allow_failure=False,
     )
     send_file(ctx.client, "tar -xzpf - -C " + shlex.quote(stage), payload)
-    ctx.logger.info(f"Архивы пакетов распакованы на устройство ({members} файлов).")
+    ctx.logger.info(i18n.tr("restore.apply.packages_extracted", count=members))
 
     if not ctx.options.install_packages:
-        ctx.logger.info("Установка отключена (--no-install-packages): файлы лежат в " + PACKAGE_STAGE_DIR + ".")
+        ctx.logger.info(i18n.tr("restore.apply.install_disabled", path=PACKAGE_STAGE_DIR))
         return
 
     manager = ctx.passport.packages.manager
     if manager not in ("apk", "opkg"):
-        ctx.logger.warn("Пакетный менеджер неизвестен: установка невозможна, файлы распакованы.")
+        ctx.logger.warn(i18n.tr("restore.apply.manager_unknown"))
         return
-    ctx.logger.info(f"Установка пакетов из архива ({manager}, без сети)…")
+    ctx.logger.info(i18n.tr("restore.apply.install_from_archive", manager=manager))
     ok, detail = _install_packages(ctx, stage, manager)
     state["package_install"] = (ok, detail, members)
     if ok:
-        ctx.logger.ok(f"Пакеты установлены из архива: {members} файлов.")
+        ctx.logger.ok(i18n.tr("restore.apply.packages_installed", count=members))
         _cleanup_package_stage(ctx, stage)
     else:
-        ctx.logger.warn(f"Установка пакетов не удалась: {detail}")
-        ctx.logger.info(f"Файлы пакетов оставлены на устройстве: {stage}")
+        ctx.logger.warn(i18n.tr("restore.apply.install_failed", detail=detail))
+        ctx.logger.info(i18n.tr("restore.apply.packages_left", path=stage))
 
 
 def _cleanup_package_stage(ctx: ApplyContext, stage: str) -> None:
@@ -409,8 +391,8 @@ def _replay_whiteouts(ctx: ApplyContext) -> None:
 
     head = run_probe(ctx.client, body, root=ctx.root, timeout=300)
     if not head.has("DONE"):
-        raise fail("OWBM-E-RST-001", step="whiteouts", reason="не удалось применить удаления OverlayFS")
-    ctx.logger.debug(f"Удалений OverlayFS применено: {len(paths)}")
+        raise fail("OWBM-E-RST-001", step="whiteouts", reason=i18n.tr("restore.apply.whiteout_failed"))
+    ctx.logger.debug(i18n.tr("restore.apply.whiteouts_applied", count=len(paths)))
 
 
 def _reload(ctx: ApplyContext, plan: RestorePlan, state: Dict[str, object]) -> None:
@@ -421,12 +403,9 @@ def _reload(ctx: ApplyContext, plan: RestorePlan, state: Dict[str, object]) -> N
     )
     result = ctx.client.run(script, timeout=120, allow_failure=True)
     if "RELOADED=1" in result.out:
-        ctx.logger.info("Сетевые настройки применены.")
+        ctx.logger.info(i18n.tr("restore.apply.network_applied"))
         return
-    ctx.logger.warn(
-        "Соединение прервалось при применении сети. Это ожидаемый риск: "
-        "сторожевой процесс вернёт прежние настройки, если связь не восстановится."
-    )
+    ctx.logger.warn(i18n.tr("restore.apply.network_disconnect"))
 
 
 def _confirm(ctx: ApplyContext, plan: RestorePlan, state: Dict[str, object]) -> None:
@@ -441,16 +420,13 @@ def _confirm(ctx: ApplyContext, plan: RestorePlan, state: Dict[str, object]) -> 
             if state.get("armed"):
                 rollback.disarm(ctx.client, root=ctx.root)
                 state["armed"] = False
-                ctx.logger.ok("Связь подтверждена, сторожевой процесс отключён.")
+                ctx.logger.ok(i18n.tr("restore.apply.watchdog_disabled"))
             return
         time.sleep(2)
     raise fail(
         "OWBM-E-RST-001",
         step="confirm",
-        reason=(
-            f"устройство не отвечает по прежнему адресу после {attempt} попыток; "
-            "сторожевой процесс вернёт прежнюю сеть и перезагрузит устройство"
-        ),
+        reason=i18n.tr("restore.apply.confirm_timeout", attempts=attempt),
     )
 
 
@@ -459,7 +435,7 @@ def _reboot(ctx: ApplyContext, plan: RestorePlan, state: Dict[str, object]) -> N
         raise fail(
             "OWBM-E-RST-001",
             step="reboot",
-            reason="перезагрузка запрещена, пока сторожевой процесс не отключён",
+            reason=i18n.tr("restore.apply.reboot_armed"),
         )
     dest = ctx.root or ""
     script = (

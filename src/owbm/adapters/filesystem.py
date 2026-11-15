@@ -6,6 +6,8 @@ survive a reboot, and can OWBM write to it.
 
 from __future__ import annotations
 
+from .. import i18n
+
 PERSISTENT_WRITABLE = frozenset(
     {"ext2", "ext3", "ext4", "f2fs", "xfs", "btrfs", "ubifs", "jffs2", "vfat", "exfat", "ntfs", "ntfs3"}
 )
@@ -36,22 +38,23 @@ PSEUDO = frozenset(
     }
 )
 
-_DESCRIPTIONS = {
-    "squashfs": "сжатый образ только для чтения (squashfs)",
-    "ext4": "журналируемая ФС (ext4)",
-    "ext3": "журналируемая ФС (ext3)",
-    "ext2": "ФС ext2",
-    "f2fs": "flash-friendly ФС (f2fs)",
-    "ubifs": "ФС для NAND (ubifs)",
-    "jffs2": "ФС для NAND (jffs2)",
-    "overlay": "объединённая ФС (OverlayFS)",
-    "tmpfs": "в оперативной памяти (tmpfs)",
-    "ramfs": "в оперативной памяти (ramfs)",
-    "vfat": "FAT (vfat)",
-    "exfat": "exFAT",
-    "ntfs": "NTFS",
-    "xfs": "XFS",
-    "btrfs": "btrfs",
+_DESCRIPTION_KEYS = {
+    "squashfs": "fs.squashfs",
+    "ext4": "fs.ext4",
+    "ext3": "fs.ext3",
+    "ext2": "fs.ext2",
+    "f2fs": "fs.f2fs",
+    "ubifs": "fs.ubifs",
+    "jffs2": "fs.jffs2",
+    "overlay": "fs.overlay",
+    "tmpfs": "fs.tmpfs",
+    "ramfs": "fs.ramfs",
+    "vfat": "fs.vfat",
+    "exfat": "fs.exfat",
+    "ntfs": "fs.ntfs",
+    "ntfs3": "fs.ntfs",
+    "xfs": "fs.xfs",
+    "btrfs": "fs.btrfs",
 }
 
 
@@ -82,4 +85,7 @@ def classify(fstype: str) -> str:
 
 
 def describe(fstype: str) -> str:
-    return _DESCRIPTIONS.get(fstype, f"неизвестный тип ФС ({fstype or 'пусто'})")
+    key = _DESCRIPTION_KEYS.get(fstype)
+    if key:
+        return i18n.tr(key)
+    return i18n.tr("fs.unknown", fstype=fstype or i18n.tr("fs.empty"))

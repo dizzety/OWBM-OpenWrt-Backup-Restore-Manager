@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from .. import archive
+from .. import archive, i18n
 from ..discovery import DevicePassport
 from ..errors import fail
 from ..remote import BODY_MARKER, ProbeResult, build_script, stream_framed
@@ -91,13 +91,13 @@ def inspect_tar(path: Path) -> Tuple[int, int]:
             for member in archive.bounded_tar_members(tf):
                 members += 1
                 if members > MAX_TAR_MEMBERS:
-                    raise fail("OWBM-E-CHK-002", reason="слишком много элементов во вложенном tar")
+                    raise fail("OWBM-E-CHK-002", reason=i18n.tr("collector.error.tar_count"))
                 path_bytes += len(member.name.encode("utf-8", "replace"))
                 if path_bytes > MAX_TAR_PATH_BYTES:
-                    raise fail("OWBM-E-CHK-002", reason="имена элементов во вложенном tar превышают предел 16 МиБ")
+                    raise fail("OWBM-E-CHK-002", reason=i18n.tr("collector.error.tar_paths"))
                 total += max(member.size, 0)
                 if total > MAX_TAR_UNCOMPRESSED_BYTES:
-                    raise fail("OWBM-E-CHK-002", reason="вложенный tar превышает предел распаковки 64 ГиБ")
+                    raise fail("OWBM-E-CHK-002", reason=i18n.tr("collector.error.tar_size"))
                 name = member.name
                 if name.startswith("/"):
                     raise fail("OWBM-E-CHK-003", path=name)
@@ -109,14 +109,14 @@ def inspect_tar(path: Path) -> Tuple[int, int]:
                 elif member.issym():
                     links.append("/".join(parts))
                 else:
-                    raise fail("OWBM-E-CHK-004", path=name, kind="специальный файл или жёсткая ссылка")
+                    raise fail("OWBM-E-CHK-004", path=name, kind=i18n.tr("collector.error.special_file_link"))
                 names.append("/".join(parts))
     except tarfile.TarError as exc:
-        raise fail("OWBM-E-CHK-002", reason=f"поток с устройства не является корректным tar.gz ({exc})")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("collector.error.tar_remote_invalid", error=exc))
     except OSError as exc:
-        raise fail("OWBM-E-CHK-002", reason=f"не удалось прочитать поток с устройства ({exc})")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("collector.error.read_stream", error=exc))
     if members == 0:
-        raise fail("OWBM-E-CHK-002", reason="поток с устройства пуст")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("collector.error.empty_stream"))
     link_set = set(links)
     for name in names:
         parts = name.split("/")
@@ -153,12 +153,12 @@ def extract_tar_safely(
                 members > MAX_TAR_MEMBERS or budget.members > budget.max_members
                 or path_bytes > MAX_TAR_PATH_BYTES
             ):
-                raise fail("OWBM-E-CHK-002", reason="вложенный tar превышает лимит элементов или имён")
+                raise fail("OWBM-E-CHK-002", reason=i18n.tr("collector.error.tar_members_or_names"))
             if (
                 total > min(max_uncompressed_bytes, MAX_TAR_UNCOMPRESSED_BYTES)
                 or budget.uncompressed_bytes > budget.max_uncompressed_bytes
             ):
-                raise fail("OWBM-E-CHK-002", reason="вложенный tar превышает предел распаковки")
+                raise fail("OWBM-E-CHK-002", reason=i18n.tr("collector.error.tar_extract_limit"))
             name = member.name
             while name.startswith("./"):
                 name = name[2:]
@@ -167,7 +167,7 @@ def extract_tar_safely(
             if name.startswith("/") or ".." in Path(name).parts:
                 raise fail("OWBM-E-CHK-003", path=member.name)
             if not (member.isfile() or member.isdir()):
-                raise fail("OWBM-E-CHK-004", path=member.name, kind="специальный файл или ссылка")
+                raise fail("OWBM-E-CHK-004", path=member.name, kind=i18n.tr("collector.error.special_file_or_link"))
             target = dest / name
             try:
                 target.parent.relative_to(dest)
@@ -181,19 +181,19 @@ def extract_tar_safely(
             target_existed = target.exists()
             new_paths = len(missing_parents) + (0 if target_existed else 1)
             if budget.paths + new_paths > budget.max_paths:
-                raise fail("OWBM-E-CHK-002", reason="распаковка создаёт слишком много путей")
+                raise fail("OWBM-E-CHK-002", reason=i18n.tr("collector.error.path_count"))
             try:
                 free = shutil.disk_usage(dest).free
                 stats = os.statvfs(dest)
             except OSError as exc:
-                raise fail("OWBM-E-CHK-002", reason=f"не удалось проверить локальное место ({exc})")
+                raise fail("OWBM-E-CHK-002", reason=i18n.tr("collector.error.disk_check", error=exc))
             available_inodes = getattr(stats, "f_favail", stats.f_ffree)
             block_size = max(getattr(stats, "f_frsize", 0), 4096)
             required_bytes = member_bytes + new_paths * block_size
             if required_bytes and free - required_bytes < EXTRACT_DISK_RESERVE_BYTES:
-                raise fail("OWBM-E-CHK-002", reason="недостаточно места для безопасной распаковки")
+                raise fail("OWBM-E-CHK-002", reason=i18n.tr("collector.error.disk_space"))
             if new_paths and available_inodes - new_paths < EXTRACT_INODE_RESERVE:
-                raise fail("OWBM-E-CHK-002", reason="недостаточно свободных inode для безопасной распаковки")
+                raise fail("OWBM-E-CHK-002", reason=i18n.tr("collector.error.inodes"))
             target.parent.mkdir(parents=True, exist_ok=True)
             budget.paths += len(missing_parents)
             if member.isdir():
@@ -271,13 +271,13 @@ def collect_configuration(client, dest: Path, passport: DevicePassport, logger=N
     header, size = stream_framed(client, CONFIG_SCRIPT, dest)
     method = header.one("METHOD", "unknown")
     members, uncompressed = inspect_tar(dest)
-    notes = (
-        "Нативная резервная копия OpenWrt (sysupgrade -b)."
-        if method == "sysupgrade"
-        else "Конфигурация собрана вручную из /etc/config: sysupgrade -b недоступен."
+    notes = i18n.tr(
+        "collector.note.configuration.native" if method == "sysupgrade"
+        else "collector.note.configuration.manual",
+        language="ru",
     )
     if method != "sysupgrade":
-        logger and logger.warn("sysupgrade -b недоступен — конфигурация собрана вручную.")
+        logger and logger.warn(i18n.tr("collector.log.sysupgrade_fallback"))
     return Collected(
         component_id="configuration",
         path=dest,
@@ -341,19 +341,24 @@ printf 'UPPER=%s\\n' "$U"
 
 def collect_overlay(client, dest: Path, upperdir: str, logger=None) -> Collected:
     if not upperdir.startswith("/") or ".." in upperdir.split("/"):
-        raise fail("OWBM-E-CHK-002", reason=f"некорректный путь верхнего слоя: {upperdir}")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("collector.error.upper_path", upperdir=upperdir))
     script = OVERLAY_SCRIPT.replace("__UPPERDIR__", upperdir)
     header, _size = stream_framed(client, script, dest)
     whiteouts = header.all("WHITEOUT")
     members, uncompressed = inspect_tar(dest)
-    excluded = tuple({"path_pattern": item, "reason": "whiteout OverlayFS: удаление из нижнего слоя"} for item in whiteouts)
+    excluded = tuple({
+        "path_pattern": item,
+        "reason": i18n.tr("collector.excluded.whiteout", language="ru"),
+    } for item in whiteouts)
     return Collected(
         component_id="overlay_upper",
         path=dest,
         members=members,
         uncompressed=uncompressed,
         excluded=excluded,
-        notes=f"верхний слой OverlayFS {upperdir}; whiteout-удалений: {len(whiteouts)}",
+        notes=i18n.tr(
+            "collector.note.overlay", language="ru", upperdir=upperdir, count=len(whiteouts)
+        ),
         extra={"whiteouts": whiteouts, "upperdir": upperdir},
     )
 
@@ -431,10 +436,7 @@ def collect_rootfs(client, dest: Path, passport: DevicePassport, logger=None) ->
         path=dest,
         members=members,
         uncompressed=uncompressed,
-        notes=(
-            "корневая ФС целиком (без /proc, /sys, /dev, /tmp, /boot, журналов "
-            "и других точек монтирования)"
-        ),
+        notes=i18n.tr("collector.note.rootfs", language="ru"),
         extra={"excluded": patterns},
     )
 
@@ -573,7 +575,7 @@ def collect_packages(
             or budget.paths >= budget.max_paths
         ):
             if logger:
-                logger.warn("Достигнут предел локальной распаковки пакетов; оставшиеся пачки пропущены.")
+                logger.warn(i18n.tr("collector.log.package_limit"))
             break
         literals = " ".join("'" + f"{name},{version}" + "'" for name, version in group)
         script = template.replace("__ENTRIES__", literals)
@@ -602,9 +604,9 @@ def collect_packages(
             else:
                 status[name] = {"name": name, "version": version, "status": state, "file": ""}
         if logger:
-            logger.debug(
-                f"пакеты: пачка {index}, получено файлов {added}, всего {fetched}"
-            )
+            logger.debug(i18n.tr(
+                "collector.log.package_chunk", index=index, added=added, total=fetched
+            ))
         chunk_file.unlink(missing_ok=True)
     _drop_package_cache(client)
 
@@ -618,12 +620,11 @@ def collect_packages(
 
     if fetched == 0:
         if logger:
-            reason = (
-                "не удалось обновить индекс пакетов (нет доступа к репозиториям?)"
-                if index_state == "fail"
-                else "репозитории не вернули ни одного пакета"
+            reason = i18n.tr(
+                "collector.warning.package_index" if index_state == "fail"
+                else "collector.warning.package_empty"
             )
-            logger.warn(f"Бинарные пакеты получить не удалось: {reason}.")
+            logger.warn(i18n.tr("collector.warning.package_binary_failure", reason=reason))
         return None, list(status.values())
 
     payload = Path(workdir) / "packages-binaries.tar.gz"
@@ -632,15 +633,18 @@ def collect_packages(
     fallback = sum(1 for item in status.values() if item["status"] == "fallback")
     unavailable = sum(1 for item in status.values() if item["status"] == "unavailable")
     if logger:
-        logger.info(
-            f"Пакеты: точных {exact}, из текущих репозиториев {fallback}, недоступных {unavailable}"
-        )
+        logger.info(i18n.tr(
+            "collector.log.package_summary", exact=exact, fallback=fallback, unavailable=unavailable
+        ))
     collected = Collected(
         component_id="packages_binaries",
         path=payload,
         members=members,
         uncompressed=uncompressed,
-        notes=f"точных версий: {exact}, из репозиториев: {fallback}, недоступно: {unavailable}",
+        notes=i18n.tr(
+            "collector.note.packages", language="ru", exact=exact,
+            fallback=fallback, unavailable=unavailable,
+        ),
         extra={"exact": exact, "fallback": fallback, "unavailable": unavailable, "rejected": rejected},
     )
     return collected, list(status.values())
@@ -657,16 +661,16 @@ def _validated_paths(paths: Sequence[str]) -> List[str]:
             raise fail(
                 "OWBM-E-CFG-002",
                 key="user_data_paths",
-                reason="управляющие символы и обратная косая черта в путях не поддерживаются",
+                reason=i18n.tr("collector.error.user_path_control"),
             )
         path = path.strip()
         if not path.startswith("/"):
-            raise fail("OWBM-E-CFG-002", key="user_data_paths", reason=f"нужен абсолютный путь: {path}")
+            raise fail("OWBM-E-CFG-002", key="user_data_paths", reason=i18n.tr("collector.error.user_path_nonabsolute", path=path))
         parts = [part for part in path.split("/") if part]
         if not parts or any(part == ".." for part in parts):
-            raise fail("OWBM-E-CFG-002", key="user_data_paths", reason=f"недопустимый путь: {path}")
+            raise fail("OWBM-E-CFG-002", key="user_data_paths", reason=i18n.tr("collector.error.user_path_bad", path=path))
         if path in ("/", "/rom", "/proc", "/sys", "/dev", "/tmp"):
-            raise fail("OWBM-E-CFG-002", key="user_data_paths", reason=f"нельзя сохранять служебный каталог: {path}")
+            raise fail("OWBM-E-CFG-002", key="user_data_paths", reason=i18n.tr("collector.error.user_path_reserved", path=path))
         result.append("/" + "/".join(parts))
     return result
 
@@ -699,17 +703,28 @@ def collect_paths(client, dest: Path, paths: Sequence[str], *, component_id: str
     if header.one("FOUND", "0") != "1":
         return None
     members, uncompressed = inspect_tar(dest)
+    note_key = {
+        "user_data": "collector.note.user_data",
+        "system_state": "collector.note.system_state",
+    }.get(component_id)
+    notes = (
+        i18n.tr(note_key, language="ru", paths=", ".join(wanted))
+        if note_key else f"{title}: {', '.join(wanted)}"
+    )
     return Collected(
         component_id=component_id,
         path=dest,
         members=members,
         uncompressed=uncompressed,
-        notes=f"{title}: {', '.join(wanted)}",
+        notes=notes,
     )
 
 
 def collect_user_data(client, dest: Path, paths: Sequence[str], logger=None) -> Optional[Collected]:
-    return collect_paths(client, dest, paths, component_id="user_data", title="пользовательские каталоги", logger=logger)
+    return collect_paths(
+        client, dest, paths, component_id="user_data",
+        title=i18n.tr("collector.title.user_data"), logger=logger
+    )
 
 
 SYSTEM_STATE_PATHS = (
@@ -726,5 +741,6 @@ SYSTEM_STATE_PATHS = (
 
 def collect_system_state(client, dest: Path, logger=None) -> Optional[Collected]:
     return collect_paths(
-        client, dest, SYSTEM_STATE_PATHS, component_id="system_state", title="службы и скрипты", logger=logger
+        client, dest, SYSTEM_STATE_PATHS, component_id="system_state",
+        title=i18n.tr("collector.title.system_state"), logger=logger
     )

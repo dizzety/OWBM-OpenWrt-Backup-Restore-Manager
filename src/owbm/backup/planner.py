@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Sequence, Tuple
 
-from .. import capabilities
+from .. import capabilities, i18n
 from ..capabilities import (
     LEVEL_CONFIG,
     LEVEL_EXACT,
@@ -94,7 +94,7 @@ def plan(
     if profile.configuration.usable:
         add(
             "configuration",
-            "Конфигурация OpenWrt",
+            i18n.tr("backup.plan.component.configuration"),
             True,
             profile.configuration.reason,
             int(2 * MIB),
@@ -103,12 +103,12 @@ def plan(
     else:
         skip("configuration", profile.configuration.reason)
         result.warnings.append(
-            "Конфигурация не будет сохранена: без неё архив не позволит восстановить устройство."
+            i18n.tr("backup.plan.configuration_warning")
         )
 
     # 2. package inventory --------------------------------------------------
     if profile.packages_inventory.usable:
-        add("packages_inventory", "Список установленных пакетов", True, profile.packages_inventory.reason, int(1 * MIB), 20)
+        add("packages_inventory", i18n.tr("backup.plan.component.packages_inventory"), True, profile.packages_inventory.reason, int(1 * MIB), 20)
     else:
         skip("packages_inventory", profile.packages_inventory.reason)
 
@@ -117,13 +117,12 @@ def plan(
     if profile.overlay_upper.usable and not has_upper:
         skip(
             "overlay_upper",
-            "на устройстве нет записываемого слоя OverlayFS: сохраняются конфигурация, "
-            "список пакетов и явно выбранные каталоги",
+            i18n.tr("backup.plan.skip.no_overlay"),
         )
     elif profile.overlay_upper.usable:
         add(
             "overlay_upper",
-            "Файлы системы и приложений",
+            i18n.tr("backup.plan.component.overlay_upper"),
             profile.overlay_upper.level == LEVEL_EXACT,
             profile.overlay_upper.reason,
             int(32 * MIB),
@@ -136,57 +135,56 @@ def plan(
     if profile.rootfs.usable and include_rootfs:
         add(
             "rootfs",
-            "Файлы системы (корневая ФС)",
+            i18n.tr("backup.plan.component.rootfs"),
             True,
             profile.rootfs.reason,
             int(96 * MIB),
             35,
         )
     elif profile.rootfs.usable:
-        skip("rootfs", "отключено параметром --no-rootfs")
+        skip("rootfs", i18n.tr("backup.plan.skip.no_rootfs"))
     else:
         skip("rootfs", profile.rootfs.reason)
 
     # 4. package binaries ---------------------------------------------------
     if include_package_binaries and profile.packages_binaries.usable:
         estimate = int(min(passport.packages.count * 200 * 1024, 2048 * MIB)) or int(4 * MIB)
-        add("packages_binaries", "Пакеты для восстановления без интернета", False, profile.packages_binaries.reason, estimate, 40)
+        add("packages_binaries", i18n.tr("backup.plan.component.packages_binaries"), False, profile.packages_binaries.reason, estimate, 40)
     elif include_package_binaries:
         skip("packages_binaries", profile.packages_binaries.reason)
     else:
-        skip("packages_binaries", "отключено параметром --no-package-binaries")
+        skip("packages_binaries", i18n.tr("backup.plan.skip.no_package_binaries"))
 
     # 5. user data ----------------------------------------------------------
     if include_user_data and user_data_paths:
         if profile.user_data.level in (LEVEL_EXACT, LEVEL_CONFIG):
             add(
                 "user_data",
-                "Пользовательские каталоги",
+                i18n.tr("backup.plan.component.user_data"),
                 False,
-                f"выбрано каталогов: {len(user_data_paths)}",
+                i18n.tr("backup.plan.user_data.selected", count=len(user_data_paths)),
                 int(16 * MIB),
                 50,
             )
         else:
             skip("user_data", profile.user_data.reason)
     elif include_user_data:
-        skip("user_data", "каталоги не выбраны (по умолчанию сохраняется только состояние системы)")
+        skip("user_data", i18n.tr("backup.plan.user_data.none"))
     else:
-        skip("user_data", "отключено параметром --no-user-data")
+        skip("user_data", i18n.tr("backup.plan.skip.no_user_data"))
 
     if profile.system_state.usable:
-        add("system_state", "Службы, скрипты, автозапуск", False, profile.system_state.reason, int(2 * MIB), 60)
+        add("system_state", i18n.tr("backup.plan.component.system_state"), False, profile.system_state.reason, int(2 * MIB), 60)
     else:
         skip("system_state", profile.system_state.reason)
 
     if not any(step.critical for step in result.steps):
         result.warnings.append(
-            "Ни один критичный компонент не доступен: архив не будет создан."
+            i18n.tr("backup.plan.no_critical_warning")
         )
     if profile.overlay_upper.level == LEVEL_INVENTORY:
         result.warnings.append(
-            "Файлы системы сохраняются частично: выбранный для устройства уровень — "
-            + profile.overlay_upper.reason
+            i18n.tr("backup.plan.partial_warning", reason=profile.overlay_upper.reason)
         )
     result.steps.sort(key=lambda item: (item.order, item.id))
     return result
@@ -203,5 +201,5 @@ def describe(plan_obj: BackupPlan) -> List[str]:
             f"  {marker} {step.title:<38} ~{human_size(step.estimate):>9}  {step.reason}"
         )
     for step_id, reason in plan_obj.skipped:
-        lines.append(f"  – {step_id:<38} {'пропущено':>10}  {reason}")
+        lines.append(f"  – {step_id:<38} {i18n.tr('backup.plan.skipped'):>10}  {reason}")
     return lines

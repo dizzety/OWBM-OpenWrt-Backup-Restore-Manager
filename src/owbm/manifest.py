@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from . import FORMAT_NAME, FORMAT_VERSION, MAX_READABLE_FORMAT_VERSION, __version__
 from .errors import fail
+from . import i18n
 from .util import parse_iso
 
 STATUS_COMPLETE = "complete"
@@ -121,64 +122,67 @@ class Manifest:
 
 def _require(data: Mapping[str, Any], key: str, kind: type, where: str = "manifest.json") -> Any:
     if key not in data:
-        raise fail("OWBM-E-CHK-002", reason=f"{where}: отсутствует поле {key}")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.field_missing", where=where, key=key))
     value = data[key]
     if not isinstance(value, kind):
-        raise fail("OWBM-E-CHK-002", reason=f"{where}: поле {key} имеет неверный тип")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.field_type", where=where, key=key))
     return value
 
 
 def validate(data: Mapping[str, Any]) -> Manifest:
     """Strict validation of an untrusted manifest."""
     if not isinstance(data, Mapping):
-        raise fail("OWBM-E-CHK-002", reason="manifest.json имеет неверную структуру")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.structure"))
     if data.get("format") != FORMAT_NAME:
         raise fail("OWBM-E-ARC-001", path="manifest.json")
     version = data.get("format_version")
     if not isinstance(version, int) or version < 1:
-        raise fail("OWBM-E-CHK-002", reason="отсутствует корректная версия формата")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.format_version"))
     if version > MAX_READABLE_FORMAT_VERSION:
         raise fail("OWBM-E-FMT-001", version=version, supported=MAX_READABLE_FORMAT_VERSION)
 
     archive_id = str(_require(data, "archive_id", str))
     if not _UUID_RE.match(archive_id):
-        raise fail("OWBM-E-CHK-002", reason="archive_id не является UUID")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.archive_id"))
     created = str(_require(data, "created_utc", str))
     if parse_iso(created) is None:
-        raise fail("OWBM-E-CHK-002", reason="created_utc не является корректной датой ISO-8601")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.created_utc"))
 
     mode = str(_require(data, "mode", str))
     if mode not in ("backup", "pre-restore", "migration"):
-        raise fail("OWBM-E-CHK-002", reason=f"неизвестное назначение архива: {mode}")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.mode", mode=mode))
 
     device = _require(data, "device", dict)
     for key in ("board_id", "arch"):
         if key not in device:
-            raise fail("OWBM-E-CHK-002", reason=f"в манифесте нет сведений об устройстве: {key}")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.device_key", key=key))
 
     raw_components = _require(data, "components", list)
     if not raw_components:
-        raise fail("OWBM-E-CHK-002", reason="манифест не описывает ни одного компонента")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.no_components"))
     components: List[Component] = []
     seen = set()
     for raw in raw_components:
         if not isinstance(raw, Mapping):
-            raise fail("OWBM-E-CHK-002", reason="компонент имеет неверный тип")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.component_type"))
         component_id = str(raw.get("id", ""))
         if component_id not in COMPONENT_IDS:
-            raise fail("OWBM-E-CHK-002", reason=f"неизвестный компонент архива: {component_id or 'пусто'}")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr(
+                "manifest.error.component_unknown",
+                component=component_id or i18n.tr("manifest.value.empty"),
+            ))
         if component_id in seen:
-            raise fail("OWBM-E-CHK-002", reason=f"компонент повторяется: {component_id}")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.component_duplicate", component=component_id))
         seen.add(component_id)
         path = str(raw.get("path", ""))
         if not path.startswith("payload/") and not path.startswith("inventory/"):
-            raise fail("OWBM-E-CHK-002", reason=f"компонент {component_id} ссылается на недопустимый путь")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.component_path", component=component_id))
         digest = str(raw.get("sha256", ""))
         if len(digest) != 64:
-            raise fail("OWBM-E-CHK-002", reason=f"компонент {component_id} без корректной контрольной суммы")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.component_checksum", component=component_id))
         size = raw.get("size")
         if not isinstance(size, int) or size <= 0:
-            raise fail("OWBM-E-CHK-002", reason=f"компонент {component_id} имеет неверный размер")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.component_size", component=component_id))
         components.append(
             Component(
                 id=component_id,
@@ -200,12 +204,12 @@ def validate(data: Mapping[str, Any]) -> Manifest:
     completeness = _require(data, "completeness", dict)
     status = completeness.get("status")
     if status not in STATUSES:
-        raise fail("OWBM-E-CHK-002", reason="неизвестный статус завершённости архива")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.completion"))
 
     compatibility_key = _require(data, "compatibility_key", dict)
     inventory = data.get("inventory") or {}
     if not isinstance(inventory, dict):
-        raise fail("OWBM-E-CHK-002", reason="поле inventory имеет неверный тип")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("manifest.error.inventory_type"))
 
     return Manifest(
         archive_id=archive_id,

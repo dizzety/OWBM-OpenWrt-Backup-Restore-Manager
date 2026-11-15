@@ -1,32 +1,32 @@
-# OWBM — пример конфигурации.
-# Скопируйте файл в $XDG_CONFIG_HOME/owbm/config.toml и отредактируйте.
-# Отсутствие этого файла не является ошибкой: программа работает без него.
+# OWBM configuration example / Пример конфигурации OWBM.
+# Copy to $XDG_CONFIG_HOME/owbm/config.toml and edit / Скопируйте в $XDG_CONFIG_HOME/owbm/config.toml и отредактируйте.
+# This file is optional / Этот файл необязателен.
 
 [general]
-# Язык интерфейса: ru или en
+# Interface language: ru or en / Язык интерфейса: ru или en
 language = "ru"
-# Каталог хранения резервных копий. Пусто = $XDG_DATA_HOME/owbm/backups
+# Backup directory; empty = $XDG_DATA_HOME/owbm/backups / Каталог резервных копий; пусто = $XDG_DATA_HOME/owbm/backups
 backup_root = ""
-# Сколько секунд ждать освобождения блокировки хранилища
+# Seconds to wait for the storage lock / Сколько секунд ждать освобождения блокировки хранилища
 lock_timeout = 30
-# Сколько снапшотов pre-restore хранить (0 = не удалять автоматически)
+# Pre-restore snapshots to keep (0 = never delete) / Сколько pre-restore-снимков хранить (0 = не удалять автоматически)
 keep_pre_restore = 5
 
 [ssh]
-# Используйте ключ или SSH agent. Пароль запрашивается интерактивно и никогда не пишется на диск.
+# Use an SSH key or agent; passwords are never stored / Используйте SSH-ключ или agent; пароль не сохраняется
 user = "root"
 port = 22
 identity_file = ""
 proxy_jump = ""
-# Пусто = $XDG_STATE_HOME/owbm/known_hosts
+# Empty = $XDG_STATE_HOME/owbm/known_hosts / Пусто = $XDG_STATE_HOME/owbm/known_hosts
 known_hosts = ""
 connect_timeout = 10
-# ask  — спрашивать подтверждение отпечатка при первом подключении
-# strict — отказывать при любом неизвестном отпечатке
+# ask = confirm fingerprint on first connection / спросить отпечаток при первом подключении
+# strict = reject unknown fingerprints / отказать при неизвестном отпечатке
 host_key_policy = "ask"
 
-# Профиль устройства. Имя профиля используется как --device <имя>.
-# Адрес — только пример из диапазона документации (RFC 5737), замените своим.
+# Profile name is used with --device <name> / Имя профиля используется с --device <имя>
+# Documentation-only RFC 5737 address; replace it / Адрес из RFC 5737 только для примера, замените его
 [devices.example]
 host = "192.0.2.1"
-label = "мой роутер"
+label = "example router"

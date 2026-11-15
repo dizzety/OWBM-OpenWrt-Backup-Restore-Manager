@@ -13,13 +13,15 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List
 
+from . import i18n
+
 _BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 _ESCAPES = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "b": "\b", "f": "\f"}
 
 
 class TomlError(ValueError):
     def __init__(self, message: str, line: int) -> None:
-        super().__init__(f"строка {line}: {message}")
+        super().__init__(i18n.tr("toml.line_error", line=line, message=message))
         self.line = line
 
 
@@ -72,17 +74,17 @@ def _split_key(text: str, lineno: int) -> List[str]:
     parts.append(buf.strip())
     for part in parts:
         if not part:
-            raise TomlError("пустой ключ", lineno)
+            raise TomlError(i18n.tr("toml.empty_key"), lineno)
     return parts
 
 
 def _parse_value(raw: str, lineno: int) -> Any:
     text = raw.strip()
     if not text:
-        raise TomlError("отсутствует значение", lineno)
+        raise TomlError(i18n.tr("toml.value_missing"), lineno)
     if text[0] == '"':
         if len(text) < 2 or text[-1] != '"':
-            raise TomlError("незакрытая строка", lineno)
+            raise TomlError(i18n.tr("toml.string_unclosed"), lineno)
         body = text[1:-1]
         result = []
         index = 0
@@ -91,7 +93,7 @@ def _parse_value(raw: str, lineno: int) -> Any:
             if char == "\\":
                 index += 1
                 if index >= len(body):
-                    raise TomlError("оборванная escape-последовательность", lineno)
+                    raise TomlError(i18n.tr("toml.escape_incomplete"), lineno)
                 code = body[index]
                 result.append(_ESCAPES.get(code, code))
             else:
@@ -100,7 +102,7 @@ def _parse_value(raw: str, lineno: int) -> Any:
         return "".join(result)
     if text[0] == "'":
         if len(text) < 2 or text[-1] != "'":
-            raise TomlError("незакрытая строка", lineno)
+            raise TomlError(i18n.tr("toml.string_unclosed"), lineno)
         return text[1:-1]
     if text in ("true", "false"):
         return text == "true"
@@ -133,7 +135,7 @@ def _parse_value(raw: str, lineno: int) -> Any:
         return int(text)
     if re.fullmatch(r"[+-]?(\d+\.\d*|\.\d+)([eE][+-]?\d+)?", text):
         return float(text)
-    raise TomlError(f"неподдерживаемое значение {text!r}", lineno)
+    raise TomlError(i18n.tr("toml.value_unsupported", value=text), lineno)
 
 
 def loads(text: str) -> Dict[str, Any]:
@@ -146,10 +148,10 @@ def loads(text: str) -> Dict[str, Any]:
             continue
         stripped = line.strip()
         if stripped.startswith("[["):
-            raise TomlError("массивы таблиц не поддерживаются", lineno)
+            raise TomlError(i18n.tr("toml.array_tables_unsupported"), lineno)
         if stripped.startswith("["):
             if not stripped.endswith("]"):
-                raise TomlError("незакрытая таблица", lineno)
+                raise TomlError(i18n.tr("toml.table_unclosed"), lineno)
             path = _split_key(stripped[1:-1], lineno)
             table = data
             for part in path:
@@ -158,11 +160,11 @@ def loads(text: str) -> Dict[str, Any]:
                     node = {}
                     table[part] = node
                 if not isinstance(node, dict):
-                    raise TomlError(f"ключ {part!r} уже занят значением", lineno)
+                    raise TomlError(i18n.tr("toml.key_value_conflict", key=part), lineno)
                 table = node
             continue
         if "=" not in stripped:
-            raise TomlError("ожидалось key = value", lineno)
+            raise TomlError(i18n.tr("toml.assignment_expected"), lineno)
         key_text, value_text = stripped.split("=", 1)
         path = _split_key(key_text, lineno)
         value = _parse_value(value_text, lineno)
@@ -170,7 +172,7 @@ def loads(text: str) -> Dict[str, Any]:
         for part in path[:-1]:
             node = node.setdefault(part, {})
             if not isinstance(node, dict):
-                raise TomlError(f"ключ {part!r} уже занят значением", lineno)
+                raise TomlError(i18n.tr("toml.key_value_conflict", key=part), lineno)
         node[path[-1]] = value
     return data
 

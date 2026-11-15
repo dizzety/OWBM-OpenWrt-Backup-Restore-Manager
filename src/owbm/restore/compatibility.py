@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence
 
+from .. import i18n
 from ..discovery import DevicePassport
 from ..manifest import STATUS_COMPLETE, Manifest
 
@@ -177,60 +178,60 @@ def compare(
 
     add(
         "board_id",
-        "Плата устройства",
+        i18n.tr("compat.title.board_id"),
         key.get("board_id", ""),
         identity.board_id,
-        explanation="основа совместимости драйверов и конфигурации оборудования",
-        mitigation="потребуется адаптация: сетевые интерфейсы, Wi-Fi и параметры оборудования",
+        explanation=i18n.tr("compat.explanation.board_id"),
+        mitigation=i18n.tr("compat.mitigation.board_id"),
     )
     add(
         "target",
-        "Цель сборки (target)",
+        i18n.tr("compat.title.target"),
         key.get("target", ""),
         identity.target,
-        explanation="разные target — разные наборы драйверов и ядер",
-        mitigation="ядерные модули и системные пакеты не переносятся",
+        explanation=i18n.tr("compat.explanation.target"),
+        mitigation=i18n.tr("compat.mitigation.target"),
     )
     add(
         "arch",
-        "Архитектура",
+        i18n.tr("compat.title.arch"),
         key.get("arch", ""),
         identity.arch,
-        explanation="бинарные пакеты другой архитектуры неприменимы",
-        mitigation="бинарные пакеты будут исключены, потребуется переустановка из репозиториев",
+        explanation=i18n.tr("compat.explanation.arch"),
+        mitigation=i18n.tr("compat.mitigation.arch"),
     )
     add(
         "package_manager",
-        "Пакетный менеджер",
+        i18n.tr("compat.title.package_manager"),
         key.get("package_manager", ""),
         passport.packages.manager,
-        explanation="APK и OPKG несовместимы по формату и базе",
-        mitigation="список пакетов будет пересобран под доступный менеджер",
+        explanation=i18n.tr("compat.explanation.package_manager"),
+        mitigation=i18n.tr("compat.mitigation.package_manager"),
     )
     add(
         "kernel_package",
-        "Версия пакета ядра",
+        i18n.tr("compat.title.kernel_package"),
         key.get("kernel_package", ""),
         identity.kernel_package,
-        explanation="модули ядра привязаны к точной версии пакета",
-        mitigation="модули ядра не переносятся; потребуется установка пакетов ядра целевой системы",
+        explanation=i18n.tr("compat.explanation.kernel_package"),
+        mitigation=i18n.tr("compat.mitigation.kernel_package"),
     )
     add(
         "kernel_release",
-        "Версия ядра",
+        i18n.tr("compat.title.kernel_release"),
         key.get("kernel_release", ""),
         identity.kernel_release,
-        explanation="разные ядра несовместимы по модулям и символам",
-        mitigation="перезагрузка и проверка модулей обязательны",
+        explanation=i18n.tr("compat.explanation.kernel_release"),
+        mitigation=i18n.tr("compat.mitigation.kernel_release"),
     )
     add(
         "writable_layer",
-        "Схема хранения",
+        i18n.tr("compat.title.writable_layer"),
         key.get("writable_layer", ""),
         _writable_layer(passport),
         base_severity=SEVERITY_WARNING,
-        explanation="набор файлов зависит от того, где хранится записываемый слой",
-        mitigation="файлы будут разложены по объединённой файловой системе цели",
+        explanation=i18n.tr("compat.explanation.writable_layer"),
+        mitigation=i18n.tr("compat.mitigation.writable_layer"),
     )
 
     # free space ------------------------------------------------------------
@@ -238,27 +239,27 @@ def compare(
     need = sum(int(item.uncompressed_size or 0) for item in components)
     free = passport.storage.free_bytes_writable
     if need <= 0:
-        verdict, sev, explanation = VERDICT_UNKNOWN, SEVERITY_WARNING, "объём распаковки неизвестен"
+        verdict, sev, explanation = VERDICT_UNKNOWN, SEVERITY_WARNING, i18n.tr("compat.space.unknown_need")
     elif free is None:
-        verdict, sev, explanation = VERDICT_UNKNOWN, SEVERITY_WARNING, "свободное место на цели не определено"
+        verdict, sev, explanation = VERDICT_UNKNOWN, SEVERITY_WARNING, i18n.tr("compat.space.unknown_free")
     elif free >= int(need * 1.2):
         verdict, sev, explanation = VERDICT_MATCH, SEVERITY_INFO, ""
     elif free >= need:
-        verdict, sev, explanation = VERDICT_ACCEPTABLE, SEVERITY_WARNING, "места впритык"
+        verdict, sev, explanation = VERDICT_ACCEPTABLE, SEVERITY_WARNING, i18n.tr("compat.space.tight")
     else:
-        verdict, sev, explanation = VERDICT_MISMATCH, SEVERITY_BLOCKING, "данные не поместятся в записываемый слой"
+        verdict, sev, explanation = VERDICT_MISMATCH, SEVERITY_BLOCKING, i18n.tr("compat.space.insufficient")
     from ..util import human_size
 
     report.checks.append(
         Check(
             name="free_space",
-            title="Свободное место на цели",
+            title=i18n.tr("compat.space.title"),
             source=human_size(need) if need else "—",
-            target=human_size(free) if free is not None else "неизвестно",
+            target=human_size(free) if free is not None else i18n.tr("compat.space.unknown"),
             verdict=verdict,
             severity=sev,
             explanation=explanation,
-            mitigation="освободите место или выберите меньше категорий (Selective Restore)"
+            mitigation=i18n.tr("compat.space.mitigation")
             if verdict == VERDICT_MISMATCH
             else "",
         )
@@ -270,23 +271,26 @@ def compare(
         report.checks.append(
             Check(
                 name="sysupgrade_restore",
-                title="sysupgrade -r на цели",
-                source="требуется",
-                target="доступен" if available else "недоступен",
+                title=i18n.tr("compat.sysupgrade.title"),
+                source=i18n.tr("compat.sysupgrade.required"),
+                target=i18n.tr("compat.sysupgrade.available" if available else "compat.sysupgrade.unavailable"),
                 verdict=VERDICT_MATCH if available else VERDICT_ACCEPTABLE,
                 severity=SEVERITY_INFO if available else SEVERITY_WARNING,
-                explanation="" if available else "конфигурация будет распакована пофайлово",
-                mitigation="" if available else "файлы /etc/config восстанавливаются напрямую",
+                explanation="" if available else i18n.tr("compat.sysupgrade.filewise"),
+                mitigation="" if available else i18n.tr("compat.sysupgrade.direct"),
             )
         )
 
     # archive completeness -------------------------------------------------
     if parsed.status != STATUS_COMPLETE:
         report.notes.append(
-            f"Архив неполный (статус {parsed.status}): восстановление затронет только сохранённые категории."
+            i18n.tr("compat.archive.incomplete", status=parsed.status)
         )
     if parsed.clock_warning:
-        report.notes.append(f"Время создания архива вызывало вопросы: {parsed.clock_warning}")
+        report.notes.append(i18n.tr(
+            "compat.archive.clock_warning",
+            warning=i18n.localize_text(parsed.clock_warning),
+        ))
 
     # level ----------------------------------------------------------------
     if report.blocking:
@@ -312,7 +316,7 @@ def raise_if_blocked(report: CompatibilityReport) -> None:
     if not blocking:
         return
     first = blocking[0]
-    reason = f"{first.title}: в архиве «{first.source}», на устройстве «{first.target}»"
+    reason = i18n.tr("compat.raise.reason", title=first.title, source=first.source, target=first.target)
     if first.name == "free_space":
         raise fail(
             "OWBM-E-CMP-002",

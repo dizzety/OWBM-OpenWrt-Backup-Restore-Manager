@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterator, List, Optional
 
 from .errors import fail
+from . import i18n
 
 KEY_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
 MAX_VALUE = 8192
@@ -92,7 +93,7 @@ def _start_deadline(proc, timeout: Optional[int]):
 
 def _check_deadline(expired: threading.Event) -> None:
     if expired.is_set():
-        raise fail("OWBM-E-DSC-003", reason="превышено время потоковой SSH-передачи")
+        raise fail("OWBM-E-DSC-003", reason=i18n.tr("remote.error.timeout"))
 
 
 def _stderr_capture(proc) -> _BoundedPipeCapture:
@@ -171,11 +172,11 @@ def parse_probe(text: str) -> ProbeResult:
             break
         total += 1
         if total > MAX_LINES:
-            raise fail("OWBM-E-DSC-003", reason=f"слишком много строк ответа (> {MAX_LINES})")
+            raise fail("OWBM-E-DSC-003", reason=i18n.tr("remote.error.lines_limit", limit=MAX_LINES))
         line_bytes = len(raw_line.encode("utf-8", "replace"))
         total_bytes += line_bytes
         if total_bytes > MAX_TOTAL:
-            raise fail("OWBM-E-DSC-003", reason=f"ответ устройства слишком велик (> {MAX_TOTAL} байт)")
+            raise fail("OWBM-E-DSC-003", reason=i18n.tr("remote.error.response_limit", limit=MAX_TOTAL))
         if len(raw_line) > MAX_HEADER_LINE_BYTES:
             if len(result.malformed) < 20:
                 result.malformed.append(raw_line[:200])
@@ -183,7 +184,7 @@ def parse_probe(text: str) -> ProbeResult:
                 raw_line = stream.readline(MAX_HEADER_LINE_BYTES + 1)
                 total_bytes += len(raw_line.encode("utf-8", "replace"))
                 if total_bytes > MAX_TOTAL:
-                    raise fail("OWBM-E-DSC-003", reason=f"ответ устройства слишком велик (> {MAX_TOTAL} байт)")
+                    raise fail("OWBM-E-DSC-003", reason=i18n.tr("remote.error.response_limit", limit=MAX_TOTAL))
             continue
         line = raw_line.rstrip("\n").rstrip("\r")
         if not line:
@@ -222,11 +223,11 @@ def run_probe(client, body: str, *, root: str = "", timeout: Optional[int] = 120
     if result.rc != 0 and not result.stdout:
         _raise_ssh_failure(client, result)
         message = (result.stderr or "").strip().splitlines()
-        detail = message[-1] if message else f"код возврата {result.rc}"
-        raise fail("OWBM-E-DSC-002", stage="сбор данных", reason=detail)
+        detail = message[-1] if message else i18n.tr("remote.error.return_code", code=result.rc)
+        raise fail("OWBM-E-DSC-002", stage="data collection", reason=detail)
     probe = parse_probe(result.out)
     if result.rc != 0:
-        probe.values.setdefault("__WARN__", []).append(f"скрипт сбора завершился с кодом {result.rc}")
+        probe.values.setdefault("__WARN__", []).append(i18n.tr("remote.error.collect_failed", code=result.rc))
     return probe
 
 
@@ -247,16 +248,17 @@ def stream_tar(
                 break
             total += len(block)
             if total > MAX_STREAM_BODY_BYTES:
-                raise fail("OWBM-E-DSC-003", reason="поток превышает предел 64 ГиБ")
+                raise fail("OWBM-E-DSC-003", reason=i18n.tr("remote.error.stream_limit"))
             yield block
         rc = proc.wait()
         _check_deadline(expired)
         stderr = stderr_capture.read()
         if stderr_capture.overflow:
-            raise fail("OWBM-E-DSC-003", reason="stderr SSH превысил предел 1 МиБ")
+            raise fail("OWBM-E-DSC-003", reason=i18n.tr("remote.error.stderr_limit"))
         if rc != 0:
             _stream_failure(
-                client, rc, stderr, stage="передача архива", default=f"код возврата {rc}"
+                client, rc, stderr, stage=i18n.tr("remote.stage.archive"),
+                default=i18n.tr("remote.error.return_code", code=rc)
             )
     finally:
         if proc.stdout:
@@ -289,17 +291,17 @@ def _write_stream_body(pipe, target, *, max_bytes: Optional[int] = None) -> int:
                 if not block:
                     break
                 if written + len(block) > limit:
-                    raise fail("OWBM-E-DSC-003", reason=f"поток превышает предел {limit} байт")
+                    raise fail("OWBM-E-DSC-003", reason=i18n.tr("remote.error.stream_size_limit", limit=limit))
                 if written == 0 or written + len(block) >= next_disk_check:
                     free = shutil.disk_usage(target.parent).free
                     if free - STREAM_DISK_CHECK_BYTES - len(block) < STREAM_DISK_RESERVE_BYTES:
-                        raise fail("OWBM-E-DSC-003", reason="недостаточно места для безопасного приёма потока")
+                        raise fail("OWBM-E-DSC-003", reason=i18n.tr("remote.error.disk_space"))
                     next_disk_check = written + STREAM_DISK_CHECK_BYTES
                 handle.write(block)
                 written += len(block)
     except OSError as exc:
         target.unlink(missing_ok=True)
-        raise fail("OWBM-E-DSC-003", reason=f"не удалось сохранить поток локально ({exc})")
+        raise fail("OWBM-E-DSC-003", reason=i18n.tr("remote.error.save_stream", error=exc))
     except BaseException:
         target.unlink(missing_ok=True)
         raise
@@ -329,13 +331,15 @@ def stream_to_file(
         _check_deadline(expired)
         stderr = stderr_capture.read()
         if stderr_capture.overflow:
-            raise fail("OWBM-E-DSC-003", reason="stderr SSH превысил предел 1 МиБ")
+            raise fail("OWBM-E-DSC-003", reason=i18n.tr("remote.error.stderr_limit"))
         if rc != 0:
             _stream_failure(
-                client, rc, stderr, stage="передача данных", default=f"код возврата {rc}"
+                client, rc, stderr, stage=i18n.tr("remote.stage.data"),
+                default=i18n.tr("remote.error.return_code", code=rc)
             )
         if written == 0:
-            raise fail("OWBM-E-DSC-002", stage="передача данных", reason="устройство вернуло пустой поток")
+            raise fail("OWBM-E-DSC-002", stage=i18n.tr("remote.stage.data"),
+                       reason=i18n.tr("remote.error.empty_stream"))
         completed = True
         return written
     finally:
@@ -379,19 +383,19 @@ def stream_framed(
                 _check_deadline(expired)
                 stderr = stderr_capture.read()
                 if stderr_capture.overflow:
-                    raise fail("OWBM-E-DSC-003", reason="stderr SSH превысил предел 1 МиБ")
+                    raise fail("OWBM-E-DSC-003", reason=i18n.tr("remote.error.stderr_limit"))
                 _stream_failure(
                     client,
                     rc,
                     stderr,
-                    stage="передача данных",
-                    default="поток прерван до начала данных",
+                    stage=i18n.tr("remote.stage.data"),
+                    default=i18n.tr("remote.error.body_interrupted"),
                 )
             if len(line) > MAX_HEADER_LINE_BYTES:
-                raise fail("OWBM-E-DSC-003", reason="строка заголовка потока превышает предел")
+                raise fail("OWBM-E-DSC-003", reason=i18n.tr("remote.error.header_line_limit"))
             header_bytes += len(line)
             if header_bytes > MAX_HEADER_BYTES:
-                raise fail("OWBM-E-DSC-003", reason="заголовок потока превышает предел 256 КиБ")
+                raise fail("OWBM-E-DSC-003", reason=i18n.tr("remote.error.header_limit"))
             text = line.decode("utf-8", "replace").rstrip("\r\n")
             if text == BODY_MARKER:
                 break
@@ -403,13 +407,15 @@ def stream_framed(
         _check_deadline(expired)
         stderr = stderr_capture.read()
         if stderr_capture.overflow:
-            raise fail("OWBM-E-DSC-003", reason="stderr SSH превысил предел 1 МиБ")
+            raise fail("OWBM-E-DSC-003", reason=i18n.tr("remote.error.stderr_limit"))
         if rc != 0:
             _stream_failure(
-                client, rc, stderr, stage="передача данных", default=f"код возврата {rc}"
+                client, rc, stderr, stage=i18n.tr("remote.stage.data"),
+                default=i18n.tr("remote.error.return_code", code=rc)
             )
         if written == 0:
-            raise fail("OWBM-E-DSC-002", stage="передача данных", reason="устройство вернуло пустой поток")
+            raise fail("OWBM-E-DSC-002", stage=i18n.tr("remote.stage.data"),
+                       reason=i18n.tr("remote.error.empty_stream"))
         probe = parse_probe("\n".join(header))
         completed = True
         return probe, written
@@ -441,9 +447,9 @@ def send_file(
 
     source = Path(src)
     if not source.is_file():
-        raise fail("OWBM-E-CHK-002", reason=f"файл не найден: {source.name}")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("remote.error.file_missing", name=source.name))
     if source.stat().st_size == 0 and not allow_empty:
-        raise fail("OWBM-E-CHK-002", reason=f"пустой файл {source.name}")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("remote.error.file_empty", name=source.name))
     proc = client.popen_command(command)
     timer, expired = _start_deadline(proc, timeout)
     stdout_capture = _BoundedPipeCapture(
@@ -470,15 +476,15 @@ def send_file(
             detail = text.strip().splitlines()
             raise fail(
                 "OWBM-E-RST-001",
-                step="передача данных на устройство",
-                reason=detail[-1] if detail else "соединение прервано во время передачи",
+                step=i18n.tr("remote.stage.send_data"),
+                reason=detail[-1] if detail else i18n.tr("remote.error.disconnected"),
             )
         rc = proc.wait()
         _check_deadline(expired)
         stderr = stderr_capture.read()
         stdout_capture.read()
         if stdout_capture.overflow or stderr_capture.overflow:
-            raise fail("OWBM-E-DSC-003", reason="ответ SSH превысил предел захвата 1 МиБ")
+            raise fail("OWBM-E-DSC-003", reason=i18n.tr("remote.error.capture_limit"))
         if rc != 0:
             text = stderr.decode("utf-8", "replace")
             if rc == 255 or "Host key verification failed" in text or "Permission denied" in text:
@@ -488,8 +494,8 @@ def send_file(
             lines = text.strip().splitlines()
             raise fail(
                 "OWBM-E-RST-001",
-                step="передача данных на устройство",
-                reason=lines[-1] if lines else f"код возврата {rc}",
+                step=i18n.tr("remote.stage.send_data"),
+                reason=lines[-1] if lines else i18n.tr("remote.error.return_code", code=rc),
             )
     finally:
         if proc.stdin and not proc.stdin.closed:

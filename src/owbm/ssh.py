@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from .errors import fail
+from . import i18n
 from .util import ensure_dir, which
 
 ASKPASS_SCRIPT = "#!/bin/sh\ncat -- \"$OWBM_ASKPASS_FILE\" 2>/dev/null\n"
@@ -81,7 +82,7 @@ class UI:
         )
 
     def ask_yes_no(self, question: str, default: bool = False) -> bool:  # pragma: no cover
-        suffix = "[Y/n]" if default else "[y/N]"
+        suffix = i18n.tr("menu.io.yes_default" if default else "menu.io.no_default")
         try:
             answer = input(f"{question} {suffix} ").strip().lower()
         except EOFError:
@@ -99,14 +100,14 @@ def _classify_failure(stderr: str, target: SSHTarget, rc: int) -> None:
     if "permission denied" in lowered or "no supported authentication" in lowered:
         raise fail("OWBM-E-SSH-004", user=target.user, host=target.host)
     if "connection refused" in lowered:
-        raise fail("OWBM-E-SSH-002", host=target.host, port=target.port, reason="Порт закрыт: SSH-сервер не принимает подключения.")
+        raise fail("OWBM-E-SSH-002", host=target.host, port=target.port, reason=i18n.tr("ssh.reason.port_closed"))
     if "no route to host" in lowered or "network is unreachable" in lowered:
-        raise fail("OWBM-E-SSH-002", host=target.host, port=target.port, reason="Устройство не отвечает: нет маршрута в сети.")
+        raise fail("OWBM-E-SSH-002", host=target.host, port=target.port, reason=i18n.tr("ssh.reason.no_route"))
     if "connection timed out" in lowered or "operation timed out" in lowered:
-        raise fail("OWBM-E-SSH-002", host=target.host, port=target.port, reason="Устройство не отвечает за отведённое время.")
+        raise fail("OWBM-E-SSH-002", host=target.host, port=target.port, reason=i18n.tr("ssh.reason.timeout"))
     if "could not resolve" in lowered or "name or service not known" in lowered:
-        raise fail("OWBM-E-SSH-002", host=target.host, port=target.port, reason="Имя устройства не разрешается в адрес.")
-    first = text.splitlines()[-1] if text else "ssh завершился с ошибкой"
+        raise fail("OWBM-E-SSH-002", host=target.host, port=target.port, reason=i18n.tr("ssh.reason.resolve"))
+    first = text.splitlines()[-1] if text else i18n.tr("ssh.reason.generic")
     raise fail("OWBM-E-SSH-002", host=target.host, port=target.port, reason=first)
 
 
@@ -186,7 +187,7 @@ class SSHClient:
             if line.strip() and not line.startswith("#")
         ]
         if not lines:
-            reason = proc.stderr.decode("utf-8", "replace").strip() or "устройство не вернуло ключей"
+            reason = proc.stderr.decode("utf-8", "replace").strip() or i18n.tr("ssh.reason.no_keys")
             raise fail("OWBM-E-SSH-008", host=self.target.host, port=self.target.port, reason=reason)
         keys: List[Tuple[str, str]] = []
         for line in lines:
@@ -194,7 +195,7 @@ class SSHClient:
             if len(parts) >= 3:
                 keys.append((parts[1], line))
         if not keys:
-            raise fail("OWBM-E-SSH-008", host=self.target.host, port=self.target.port, reason="неизвестный формат ключа")
+            raise fail("OWBM-E-SSH-008", host=self.target.host, port=self.target.port, reason=i18n.tr("ssh.reason.unknown_key"))
         return keys
 
     @staticmethod
@@ -208,7 +209,7 @@ class SSHClient:
         )
         text = proc.stdout.decode("utf-8", "replace").strip()
         if not text:
-            return "не удалось вычислить отпечаток"
+            return i18n.tr("ssh.fingerprint.failed")
         fields = text.split()
         for token in fields:
             if token.startswith("SHA256:"):
@@ -231,12 +232,12 @@ class SSHClient:
                 raise fail("OWBM-E-SSH-006")
             ui = ui or UI()
             ui.say("")
-            ui.say(f"Первое подключение к {self.target.host}:{self.target.port}")
-            ui.say("Отпечатки всех предложенных ключей:")
+            ui.say(i18n.tr("ssh.first_connection", host=self.target.host, port=self.target.port))
+            ui.say(i18n.tr("ssh.fingerprints"))
             for key_type, key_line in keys:
                 ui.say(f"  {key_type}: {self.fingerprint(key_line)}")
-            ui.say("Сверьте все отпечатки с устройством (LuCI → SSH, или консоль).")
-            if not ui.ask_yes_no("Доверять этому ключу?", default=False):
+            ui.say(i18n.tr("ssh.verify_fingerprint"))
+            if not ui.ask_yes_no(i18n.tr("ssh.trust_key"), default=False):
                 raise fail("OWBM-E-SSH-006")
         path = self._known_hosts_path()
         ensure_dir(path.parent, 0o700)
@@ -291,7 +292,7 @@ class SSHClient:
                 "OWBM-E-SSH-008",
                 host=self.target.host,
                 port=self.target.port,
-                reason="устройство не вернуло ключей",
+                reason=i18n.tr("ssh.reason.no_keys"),
             )
         fingerprints = [(key_type, self.fingerprint(key_line)) for key_type, key_line in candidates]
         if any(not fingerprint.startswith("SHA256:") for _key_type, fingerprint in fingerprints):
@@ -299,7 +300,7 @@ class SSHClient:
                 "OWBM-E-SSH-008",
                 host=self.target.host,
                 port=self.target.port,
-                reason="не удалось проверить отпечаток SSH-ключа",
+                reason=i18n.tr("ssh.reason.fingerprint"),
             )
         self.remove_known_host()
         path = self._known_hosts_path()
@@ -359,7 +360,9 @@ class SSHClient:
         argv = self.build_argv()
         payload = stdin_bytes if stdin_bytes is not None else script.encode("utf-8")
         if self.logger:
-            self.logger.debug(f"ssh {' '.join(argv[1:-1])} (script {len(payload)} байт)")
+            self.logger.debug(i18n.tr(
+                "ssh.debug.script_bytes", command=' '.join(argv[1:-1]), size=len(payload)
+            ))
         with self._password_env() as env:
             try:
                 proc = subprocess.Popen(
@@ -445,9 +448,9 @@ class SSHClient:
         if overflow.is_set():
             raise fail(
                 "OWBM-E-DSC-003",
-                reason=(
-                    "ответ SSH превысил предел "
-                    f"stdout={MAX_CAPTURE_STDOUT_BYTES}, stderr={MAX_CAPTURE_STDERR_BYTES} байт"
+                reason=i18n.tr(
+                    "ssh.reason.capture_limit", stdout=MAX_CAPTURE_STDOUT_BYTES,
+                    stderr=MAX_CAPTURE_STDERR_BYTES,
                 ),
             )
         result = RunResult(rc, bytes(stdout_data), stderr_data.decode("utf-8", "replace"))

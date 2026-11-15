@@ -29,6 +29,82 @@ def test_help_without_command(isolated_env, capsys):
     assert rc == 2
 
 
+def test_english_help_can_be_selected_before_argument_parsing(isolated_env, capsys):
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["--lang", "en", "--help"])
+    assert raised.value.code == 0
+    assert "back up and restore OpenWrt over SSH" in capsys.readouterr().out
+
+
+def test_russian_argparse_boilerplate_is_localized(isolated_env, capsys):
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["--help"])
+    assert raised.value.code == 0
+    output = capsys.readouterr().out
+    assert "использование:" in output
+    assert "позиционные аргументы:" in output
+    assert "показать справку и выйти" in output
+    assert "usage:" not in output
+
+
+def test_russian_argparse_errors_translate_standard_diagnostics(isolated_env, capsys):
+    with pytest.raises(SystemExit) as invalid_integer:
+        cli.main(["--port", "abc", "info"])
+    assert invalid_integer.value.code == 2
+    assert "неверное целое число" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit) as invalid_choice:
+        cli.main(["--lang", "fr", "--help"])
+    assert invalid_choice.value.code == 2
+    error = capsys.readouterr().err
+    assert "недопустимый вариант" in error
+    assert "выберите из" in error
+    assert "invalid choice" not in error
+
+    with pytest.raises(SystemExit):
+        cli.main(["--lang", "choose from", "--help"])
+    error = capsys.readouterr().err
+    assert "'choose from'" in error
+    assert "(выберите из " in error
+
+    with pytest.raises(SystemExit) as unrecognized:
+        cli.main(["--wat"])
+    assert unrecognized.value.code == 2
+    assert "неизвестные аргументы" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit) as missing_value:
+        cli.main(["--port"])
+    assert missing_value.value.code == 2
+    assert "ожидался один аргумент" in capsys.readouterr().err
+
+
+def test_english_error_output(isolated_env, capsys):
+    assert cli.main(["--lang", "en", "info"]) == 2
+    assert "Connection profile" in capsys.readouterr().err
+
+
+def test_config_language_selects_english_without_cli_override(isolated_env, capsys):
+    config = isolated_env / "config" / "owbm" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text('[general]\nlanguage = "en"\n', encoding="utf-8")
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["--help"])
+    assert raised.value.code == 0
+    assert "back up and restore OpenWrt over SSH" in capsys.readouterr().out
+
+
+def test_invalid_utf8_config_does_not_crash_language_detection(isolated_env, capsys):
+    config = isolated_env / "config" / "owbm" / "config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_bytes(b'[general]\nlanguage = "en"\n# \xff')
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["--help"])
+    assert raised.value.code == 0
+    assert "OWBM — резервное копирование" in capsys.readouterr().out
+    assert cli.main(["config-show"]) == 2
+    assert "корректным UTF-8" in capsys.readouterr().err
+
+
 def test_info_without_target(isolated_env, capsys):
     rc = cli.main(["info"])
     assert rc == 2

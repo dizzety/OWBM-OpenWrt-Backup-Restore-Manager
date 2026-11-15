@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, List, Optional
 
+from .. import i18n
 from . import mountinfo
 from .mountinfo import MountEntry
 
@@ -48,23 +49,23 @@ def is_whiteout(mode_char: str, major: int, minor: int) -> bool:
 def path_problem(path: str) -> Optional[str]:
     """Return a reason if the relative path is unsafe, else None."""
     if not path:
-        return "пустой путь"
+        return i18n.tr("overlay.path.empty")
     if path.startswith("/"):
-        return "абсолютный путь"
+        return i18n.tr("overlay.path.absolute")
     if "\x00" in path or "\r" in path or "\n" in path or "\t" in path:
-        return "управляющий символ в пути"
+        return i18n.tr("overlay.path.control")
     if len(path) > 4096:
-        return "слишком длинный путь"
+        return i18n.tr("overlay.path.long")
     normalized = path
     while normalized.startswith("./"):
         normalized = normalized[2:]
     if normalized in (".", ""):
-        return "пустой путь"
+        return i18n.tr("overlay.path.empty")
     parts = normalized.split("/")
     if any(part == ".." for part in parts):
-        return "выход за пределы каталога"
+        return i18n.tr("overlay.path.escape")
     if any(part == "" for part in parts):
-        return "пустой компонент пути"
+        return i18n.tr("overlay.path.empty_component")
     return None
 
 
@@ -75,14 +76,14 @@ def validate_whiteout_paths(paths: Iterable[str]) -> List[str]:
     for raw in paths:
         path = raw.strip()
         if not path:
-            problems.append("пустая строка в списке whiteout")
+            problems.append(i18n.tr("overlay.whiteout.empty"))
             continue
         reason = path_problem(path)
         if reason:
-            problems.append(f"{path}: {reason}")
+            problems.append(i18n.tr("overlay.whiteout.invalid", path=path, reason=reason))
             continue
         if path in seen:
-            problems.append(f"{path}: повторяющийся путь")
+            problems.append(i18n.tr("overlay.whiteout.duplicate", path=path))
             continue
         seen.add(path)
     return problems

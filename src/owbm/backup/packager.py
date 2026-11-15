@@ -15,14 +15,14 @@ import shutil
 import sys
 import tempfile
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from .. import __version__, archive, manifest as manifest_mod
+from .. import __version__, archive, capabilities as capabilities_mod, i18n, manifest as manifest_mod
 from ..discovery import DevicePassport
-from ..errors import fail
+from ..errors import OwbmError, fail
 from ..storage import ArchiveInfo, ArchiveStore
 from ..util import clock_sanity, human_size, iso_utc, sha256_file, which
 from . import collector, planner
@@ -139,19 +139,19 @@ def _collect_step(client, step, workdir: Path, passport: DevicePassport, options
         try:
             return collector.collect_system_state(client, workdir / "system-state.tar.gz", logger), {}
         except Exception as exc:  # noqa: BLE001 - optional category
-            logger.debug(f"system_state не собран: {exc}")
+            logger.debug(i18n.tr("backup.log.system_state_skipped", error=exc))
             return None, {}
     return None, {}
 
 
 def _encrypt_candidate(candidate: Path, tool: str, logger) -> Path:
     if not which(tool):
-        raise fail("OWBM-E-CFG-004", tool=tool, purpose="шифрование архива")
+        raise fail("OWBM-E-CFG-004", tool=tool, purpose=i18n.tr("backup.purpose.encrypt"))
     if not sys.stdin.isatty():
         raise fail(
             "OWBM-E-CFG-002",
             key="--encrypt",
-            reason="шифрование требует интерактивного ввода пароля в терминале",
+            reason=i18n.tr("backup.error.encrypt_tty"),
         )
     if tool == "age":
         target = candidate.with_suffix(candidate.suffix + ".age")
@@ -164,15 +164,15 @@ def _encrypt_candidate(candidate: Path, tool: str, logger) -> Path:
     proc = subprocess.run(argv)
     if proc.returncode != 0 or not target.exists() or target.stat().st_size == 0:
         target.unlink(missing_ok=True)
-        raise fail("OWBM-E-CFG-002", key="--encrypt", reason=f"{tool} завершился с ошибкой")
+        raise fail("OWBM-E-CFG-002", key="--encrypt", reason=i18n.tr("backup.error.encrypt_failed", tool=tool))
     candidate.unlink(missing_ok=True)
-    logger.ok(f"Архив зашифрован: {tool}")
+    logger.ok(i18n.tr("backup.log.encrypted", tool=tool))
     return target
 
 
 def _inventory_blobs(
     passport: DevicePassport,
-    profile_caps,
+    capabilities_snapshot: Dict[str, object],
     plan_obj: planner.BackupPlan,
     package_status: Sequence[Dict[str, str]],
     whiteouts: Sequence[str],
@@ -193,14 +193,19 @@ def _inventory_blobs(
                 or [item.as_dict() for item in passport.packages.installed],
             }
         ),
-        "inventory/capabilities.json": _json_bytes(profile_caps.as_dict()),
+        "inventory/capabilities.json": _json_bytes(capabilities_snapshot),
     }
     excluded: List[Dict[str, object]] = [
-        {"id": step_id, "reason": reason} for step_id, reason in plan_obj.skipped
+        {"id": step_id, "reason": i18n.localize_text(reason, language="ru")}
+        for step_id, reason in plan_obj.skipped
     ]
     for component_id, item in collected.items():
         if item.excluded:
-            excluded.append({"id": component_id, "reason": "исключено при сборе", "items": list(item.excluded)})
+            excluded.append({
+                "id": component_id,
+                "reason": i18n.tr("backup.excluded.reason", language="ru"),
+                "items": list(item.excluded),
+            })
     blobs["inventory/excluded.json"] = _json_bytes(excluded)
     if whiteouts:
         blobs["inventory/overlay-whiteouts.txt"] = ("\n".join(whiteouts) + "\n").encode("utf-8")
@@ -209,25 +214,39 @@ def _inventory_blobs(
 
 def _instructions(passport: DevicePassport, manifest_obj) -> str:
     ident = passport.identity
-    lines = [
-        "OWBM — архив пользовательского состояния OpenWrt",
-        "",
-        f"Устройство: {ident.board_name or 'неизвестно'} ({ident.model or 'модель не указана'})",
-        f"OpenWrt: {ident.release or 'неизвестно'} {ident.revision or ''}".rstrip(),
-        f"Архитектура: {ident.arch or 'неизвестно'}; ядро: {ident.kernel_release or 'неизвестно'}",
-        f"Создан: {manifest_obj.created_utc} (UTC)",
-        "",
-        "Состав архива:",
-    ]
-    for component in manifest_obj.components:
-        lines.append(f"  - {component.id}: {component.path}")
-    lines += [
-        "",
-        "Архив содержит пароли, ключи и токены из конфигураций. Храните его приватно.",
-        "Прошивка, /rom и raw-разделы в архив не входят и не восстанавливаются.",
-        "Восстанавливайте архив программой owbm: она проверяет совместимость,",
-        "создаёт снапшот целевого устройства и умеет откатываться при сбое.",
-    ]
+    components = [f"  - {component.id}: {component.path}" for component in manifest_obj.components]
+
+    def section(language: str, section_key: str) -> List[str]:
+        unknown = i18n.tr("backup.archive.value.unknown", language=language)
+        model_missing = i18n.tr("backup.archive.value.model_missing", language=language)
+        return [
+            i18n.tr(section_key, language=language),
+            i18n.tr("backup.archive.instructions.title", language=language),
+            "",
+            i18n.tr(
+                "backup.archive.notes.device", language=language,
+                board=ident.board_name or unknown, model=ident.model or model_missing,
+            ),
+            i18n.tr(
+                "backup.archive.notes.release", language=language,
+                release=ident.release or unknown, revision=ident.revision or "",
+            ).rstrip(),
+            i18n.tr(
+                "backup.archive.notes.arch", language=language,
+                arch=ident.arch or unknown, kernel=ident.kernel_release or unknown,
+            ),
+            i18n.tr("backup.archive.instructions.created", language=language, time=manifest_obj.created_utc),
+            "",
+            i18n.tr("backup.archive.instructions.contents", language=language),
+            *components,
+            "",
+            i18n.tr("backup.archive.instructions.secrets", language=language),
+            i18n.tr("backup.archive.instructions.firmware", language=language),
+            i18n.tr("backup.archive.instructions.restore", language=language),
+        ]
+
+    lines = section("ru", "backup.archive.instructions.section.ru")
+    lines += ["", *section("en", "backup.archive.instructions.section.en")]
     return "\n".join(lines) + "\n"
 
 
@@ -243,6 +262,28 @@ def _support_level(profile_caps, component_id: str) -> str:
     }
     support = mapping.get(component_id)
     return support.level if support is not None else "exact"
+
+
+def _canonical_archive_passport(passport: DevicePassport) -> DevicePassport:
+    """Copy localized passport diagnostics into the stable archive locale."""
+    warnings = tuple(i18n.localize_text(item, language="ru") for item in passport.warnings)
+    sysupgrade = replace(
+        passport.tools.sysupgrade,
+        notes=tuple(i18n.localize_text(item, language="ru") for item in passport.tools.sysupgrade.notes),
+    )
+    tools = replace(passport.tools, sysupgrade=sysupgrade)
+    return replace(passport, warnings=warnings, tools=tools)
+
+
+def _archive_error_detail(exc: Exception) -> str:
+    """Serialize known OWBM errors in the archive's stable Russian locale."""
+    if isinstance(exc, OwbmError):
+        with i18n.language_context("ru"):
+            return f"[{exc.code}] {exc.what}"
+    if isinstance(exc, OSError):
+        errno_detail = f" (errno {exc.errno})" if exc.errno is not None else ""
+        return f"{type(exc).__name__}{errno_detail}"
+    return type(exc).__name__
 
 
 def create_backup(
@@ -266,12 +307,16 @@ def create_backup(
         include_rootfs=options.include_rootfs,
     )
     result = BackupResult(plan=plan_obj, warnings=list(plan_obj.warnings))
+    archive_passport = _canonical_archive_passport(passport)
+    with i18n.language_context("ru"):
+        archive_profile_caps = capabilities_mod.analyze(archive_passport)
+        capabilities_snapshot = archive_profile_caps.as_dict()
 
     if not any(step.critical for step in plan_obj.steps):
-        raise fail("OWBM-E-CMP-001", reason="нет ни одного критичного компонента для сохранения")
+        raise fail("OWBM-E-CMP-001", reason=i18n.tr("backup.error.no_critical"))
 
     if options.dry_run:
-        result.report.append("Пробный запуск: сбор и запись не выполнялись.")
+        result.report.append(i18n.tr("backup.dry_run"))
         return result
 
     moment = now or datetime.now(timezone.utc)
@@ -291,6 +336,12 @@ def create_backup(
             package_status: List[Dict[str, str]] = []
             whiteouts: List[str] = []
             stages: List[Dict[str, str]] = []
+            archive_stages: List[Dict[str, str]] = []
+            archive_warnings = [
+                i18n.localize_text(warning, language="ru") for warning in plan_obj.warnings
+            ]
+            if clock_warning:
+                archive_warnings.append(i18n.localize_text(clock_warning, language="ru"))
 
             for step in plan_obj.steps:
                 journal.start(step.id)
@@ -299,17 +350,29 @@ def create_backup(
                     item, extra = _collect_step(client, step, workdir, passport, options, logger)
                 except Exception as exc:  # noqa: BLE001 - re-raised if critical
                     journal.fail(step.id, str(exc))
+                    runtime_detail = str(exc)
+                    stable_detail = _archive_error_detail(exc)
                     if step.critical:
-                        stages.append({"name": step.id, "status": "failed", "detail": str(exc)})
+                        stages.append({"name": step.id, "status": "failed", "detail": runtime_detail})
                         result.stages = stages
                         raise
-                    logger.warn(f"Шаг «{step.title}» пропущен: {exc}")
-                    stages.append({"name": step.id, "status": "failed", "detail": str(exc)})
-                    result.warnings.append(f"Не сохранено: {step.title} ({exc})")
+                    logger.warn(i18n.tr("backup.stage.skipped", title=step.title, error=exc))
+                    stages.append({"name": step.id, "status": "failed", "detail": runtime_detail})
+                    archive_stages.append({"name": step.id, "status": "failed", "detail": stable_detail})
+                    result.warnings.append(i18n.tr("backup.warning.not_saved", title=step.title, error=exc))
+                    archive_warnings.append(i18n.tr(
+                        "backup.warning.not_saved", language="ru",
+                        title=i18n.localize_text(step.title, language="ru"), error=stable_detail,
+                    ))
                     continue
                 if item is None:
-                    journal.skip(step.id, "нет данных")
-                    stages.append({"name": step.id, "status": "skipped", "detail": "нет данных"})
+                    no_data = i18n.tr("backup.no_data")
+                    journal.skip(step.id, no_data)
+                    stages.append({"name": step.id, "status": "skipped", "detail": no_data})
+                    archive_stages.append({
+                        "name": step.id, "status": "skipped",
+                        "detail": i18n.tr("backup.no_data", language="ru"),
+                    })
                     continue
                 if extra.get("whiteouts"):
                     whiteouts = list(extra["whiteouts"])
@@ -318,9 +381,11 @@ def create_backup(
                 collected[step.id] = item
                 journal.ok(step.id, item.notes)
                 stages.append({"name": step.id, "status": "ok", "detail": item.notes})
+                archive_stages.append({"name": step.id, "status": "ok", "detail": item.notes})
 
             inventory_blobs = _inventory_blobs(
-                passport, profile_caps, plan_obj, package_status, whiteouts, collected
+                archive_passport, capabilities_snapshot, plan_obj,
+                package_status, whiteouts, collected
             )
 
             components: List[manifest_mod.Component] = []
@@ -332,7 +397,7 @@ def create_backup(
                     manifest_mod.Component(
                         id=component_id,
                         path=archive_path,
-                        support_level=_support_level(profile_caps, component_id),
+                        support_level=_support_level(archive_profile_caps, component_id),
                         portability=manifest_mod.PORTABILITY_PORTABLE,
                         critical=component_id in ("configuration", "overlay_upper", "rootfs"),
                         sha256=sha256_file(item.path),
@@ -355,7 +420,10 @@ def create_backup(
                     sha256=hashlib.sha256(packages_json).hexdigest(),
                     size=len(packages_json),
                     restore_order=RESTORE_ORDER["packages_inventory"],
-                    notes=f"{passport.packages.manager}: {passport.packages.count} пакетов",
+                    notes=i18n.tr(
+                        "backup.archive.packages.notes", language="ru",
+                        manager=passport.packages.manager, count=passport.packages.count,
+                    ),
                 )
             )
 
@@ -369,8 +437,8 @@ def create_backup(
                 archive_id=str(uuid.uuid4()),
                 created_utc=iso_utc(moment),
                 mode=options.mode,
-                device=_device_block(passport, device_label),
-                capabilities_snapshot=profile_caps.as_dict(),
+                device=_device_block(archive_passport, device_label),
+                capabilities_snapshot=capabilities_snapshot,
                 components=components,
                 inventory={
                     "packages": {
@@ -381,9 +449,9 @@ def create_backup(
                     "whiteouts": len(whiteouts),
                 },
                 status=status,
-                stages=stages,
-                warnings=result.warnings,
-                clock_warning=clock_warning,
+                stages=archive_stages,
+                warnings=archive_warnings,
+                clock_warning=i18n.localize_text(clock_warning, language="ru") if clock_warning else None,
             )
 
             needed = sum(item.path.stat().st_size for item in collected.values()) + sum(
@@ -418,11 +486,14 @@ def create_backup(
             journal.start("verify")
             report = archive.verify_archive(candidate)
             report.raise_first()
-            journal.ok("verify", f"элементов: {report.members}, сумм: {report.checksums_verified}")
-            logger.ok(
-                f"Собрано и проверено: {human_size(candidate.stat().st_size)}, "
-                f"элементов {report.members}, контрольных сумм {report.checksums_verified}"
-            )
+            journal.ok("verify", i18n.tr(
+                "backup.log.verify_detail", members=report.members,
+                checksums=report.checksums_verified,
+            ))
+            logger.ok(i18n.tr(
+                "backup.log.verified", size=human_size(candidate.stat().st_size),
+                members=report.members, checksums=report.checksums_verified,
+            ))
 
             if options.encrypt:
                 journal.start("encrypt")
@@ -437,7 +508,7 @@ def create_backup(
 
             mode_bits = final.stat().st_mode & 0o777
             if mode_bits != 0o600:
-                result.warnings.append(f"Не удалось ограничить права архива (режим {oct(mode_bits)}).")
+                result.warnings.append(i18n.tr("backup.warning.permissions", mode=oct(mode_bits)))
 
             result.path = final
             result.manifest = manifest_obj.as_dict()
@@ -449,9 +520,9 @@ def create_backup(
                 manifest=result.manifest,
                 mode=options.mode,
             )
-            result.report.append(f"Архив: {final}")
-            result.report.append(f"Размер: {human_size(final.stat().st_size)}")
-            result.report.append(f"SHA-256: {sha256_file(final)}")
+            result.report.append(i18n.tr("backup.report.archive", path=final))
+            result.report.append(i18n.tr("backup.report.size", size=human_size(final.stat().st_size)))
+            result.report.append(i18n.tr("backup.report.checksum", checksum=sha256_file(final)))
         return result
     finally:
         if candidate is not None and candidate.exists():

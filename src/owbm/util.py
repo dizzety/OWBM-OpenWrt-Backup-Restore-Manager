@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 from .errors import OwbmError, fail
+from . import i18n
 
 _SAFE_RE = re.compile(r"[^a-z0-9._-]+")
 
@@ -55,20 +56,23 @@ def parse_iso(value: Optional[str]) -> Optional[datetime]:
 
 def human_size(size: int) -> str:
     value = float(max(0, size))
-    for unit in ("Б", "КиБ", "МиБ", "ГиБ", "ТиБ"):
-        if value < 1024 or unit == "ТиБ":
-            if unit == "Б":
+    unit_keys = ("util.size.byte", "util.size.kib", "util.size.mib", "util.size.gib", "util.size.tib")
+    for unit_key in unit_keys:
+        unit = i18n.tr(unit_key)
+        if value < 1024 or unit_key == "util.size.tib":
+            if unit_key == "util.size.byte":
                 return f"{int(value)} {unit}"
             return f"{value:.1f} {unit}"
         value /= 1024
-    return f"{value:.1f} ТиБ"
+    return f"{value:.1f} {i18n.tr('util.size.tib')}"
 
 
 def parse_size(text: str) -> int:
     """Parse '512K', '10M', '2G', '1024' into bytes."""
     match = re.fullmatch(r"\s*(\d+)\s*([KkMmGgTt]?)[Bb]?\s*", text or "")
     if not match:
-        raise fail("OWBM-E-CFG-002", key="размер", reason=f"ожидалось число с суффиксом K/M/G, получено {text!r}")
+        raise fail("OWBM-E-CFG-002", key=i18n.tr("util.size.key"),
+                   reason=i18n.tr("util.size.invalid", value=text))
     value = int(match.group(1))
     factor = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}
     return value * factor[match.group(2).lower()]
@@ -171,15 +175,9 @@ def clock_sanity(moment: Optional[datetime] = None) -> Optional[str]:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     if moment.year < 2020:
-        return (
-            "Часы компьютера показывают дату раньше 2020 года. "
-            "Имя архива станет неверным; проверьте системное время."
-        )
+        return i18n.tr("util.clock.past")
     if moment > datetime.now(timezone.utc) + timedelta(days=1):
-        return (
-            "Часы компьютера показывают дату в будущем. "
-            "Сортировка архивов по дате будет неточной; проверьте системное время."
-        )
+        return i18n.tr("util.clock.future")
     return None
 
 

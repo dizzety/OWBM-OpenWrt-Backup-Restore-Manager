@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from . import archive, manifest as manifest_mod
+from . import archive, i18n, manifest as manifest_mod
 from .discovery import DevicePassport, discover
 from .errors import OwbmError, fail
 from .manifest import Manifest
@@ -98,27 +98,23 @@ class MigratePlan:
 
     def describe(self) -> List[str]:
         if self.install_packages_enabled:
-            package_summary = (
-                f"  пакетов: из репозиториев установить {len(self.packages_install)}, "
-                f"из архива {len(self.packages_archive_install)}, "
-                f"уже есть {len(self.packages_present)}, "
-                f"недоступно {len(self.packages_unavailable)}, "
-                f"пакетных файлов пропущено {len(self.packages_archive_incompatible)}"
+            package_summary = i18n.tr(
+                "migrate.plan.packages.enabled",
+                repos=len(self.packages_install), archive=len(self.packages_archive_install),
+                present=len(self.packages_present), unavailable=len(self.packages_unavailable),
+                skipped=len(self.packages_archive_incompatible),
             )
         else:
-            package_summary = (
-                f"  пакетов: установка отключена; доступны из репозиториев {len(self.packages_install)}, "
-                f"из архива {len(self.packages_archive_install)}, "
-                f"уже есть {len(self.packages_present)}, "
-                f"недоступно {len(self.packages_unavailable)}, "
-                f"пакетных файлов пропущено {len(self.packages_archive_incompatible)}"
+            package_summary = i18n.tr(
+                "migrate.plan.packages.disabled",
+                repos=len(self.packages_install), archive=len(self.packages_archive_install),
+                present=len(self.packages_present), unavailable=len(self.packages_unavailable),
+                skipped=len(self.packages_archive_incompatible),
             )
         lines = [
             package_summary,
-            f"  конфигов: скопировать {len(self.configs_copy)}, "
-            f"оставить свои {len(self.configs_kept)}",
-            f"  файлов приложений: скопировать {len(self.files_copy)}, "
-            f"пропущено бинарников {len(self.files_skipped_binary)}",
+            i18n.tr("migrate.plan.configs", copy=len(self.configs_copy), kept=len(self.configs_kept)),
+            i18n.tr("migrate.plan.files", copy=len(self.files_copy), skipped=len(self.files_skipped_binary)),
         ]
         return lines
 
@@ -200,12 +196,12 @@ def _bounded_tar_members(tf):
     total = 0
     for count, member in enumerate(archive.bounded_tar_members(tf), start=1):
         if count > MAX_PACKAGE_ARCHIVE_MEMBERS:
-            raise fail("OWBM-E-CHK-002", reason="слишком много элементов в packages_binaries")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("migrate.error.package_count"))
         if member.size < 0:
-            raise fail("OWBM-E-CHK-002", reason="отрицательный размер элемента packages_binaries")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("migrate.error.package_negative_size"))
         total += member.size
         if total > MAX_PACKAGE_ARCHIVE_UNCOMPRESSED_BYTES:
-            raise fail("OWBM-E-CHK-002", reason="packages_binaries превышает лимит распаковки 1 GiB")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("migrate.error.package_bundle_limit"))
         yield member
 
 
@@ -319,17 +315,17 @@ def source_configs(archive_path: Path) -> Dict[str, bytes]:
         try:
             payload = zf.open("payload/configuration.tar.gz")
         except KeyError:
-            raise fail("OWBM-E-CHK-002", reason="в архиве нет configuration payload")
+            raise fail("OWBM-E-CHK-002", reason=i18n.tr("migrate.error.config_missing"))
         with payload, archive.open_tar_gz(fileobj=payload) as tf:
             for count, member in enumerate(archive.bounded_tar_members(tf), start=1):
                 path_bytes += len(member.name.encode("utf-8", "replace"))
                 tar_total += max(member.size, 0)
                 if count > MAX_CONFIG_ARCHIVE_MEMBERS:
-                    raise fail("OWBM-E-CHK-002", reason="слишком много элементов в архиве конфигурации")
+                    raise fail("OWBM-E-CHK-002", reason=i18n.tr("migrate.error.config_count"))
                 if path_bytes > archive.MAX_TAR_PATH_BYTES:
-                    raise fail("OWBM-E-CHK-002", reason="имена элементов конфигурации превышают предел 16 МиБ")
+                    raise fail("OWBM-E-CHK-002", reason=i18n.tr("migrate.error.config_names_limit"))
                 if tar_total > archive.MAX_TAR_UNCOMPRESSED_BYTES:
-                    raise fail("OWBM-E-CHK-002", reason="вложенный tar конфигурации превышает 64 ГиБ")
+                    raise fail("OWBM-E-CHK-002", reason=i18n.tr("migrate.error.config_tar_limit"))
                 if not member.isfile():
                     continue
                 name = member.name
@@ -338,15 +334,15 @@ def source_configs(archive_path: Path) -> Dict[str, bytes]:
                 if not name or name.startswith("/") or ".." in Path(name).parts:
                     continue
                 if member.size < 0 or member.size > MAX_CONFIG_FILE_BYTES:
-                    raise fail("OWBM-E-CHK-002", reason="файл конфигурации превышает предел 8 МиБ")
+                    raise fail("OWBM-E-CHK-002", reason=i18n.tr("migrate.error.config_file_limit"))
                 if total_bytes + member.size > MAX_CONFIG_TOTAL_BYTES:
-                    raise fail("OWBM-E-CHK-002", reason="конфигурация превышает общий предел 32 МиБ")
+                    raise fail("OWBM-E-CHK-002", reason=i18n.tr("migrate.error.config_total_limit"))
                 handle = tf.extractfile(member)
                 if handle is None:
                     continue
                 data = handle.read(member.size + 1)
                 if len(data) != member.size:
-                    raise fail("OWBM-E-CHK-002", reason="файл конфигурации повреждён или обрезан")
+                    raise fail("OWBM-E-CHK-002", reason=i18n.tr("migrate.error.config_corrupt"))
                 total_bytes += len(data)
                 result[name] = data
     return result
@@ -366,7 +362,7 @@ def target_config_names(client, *, root: str = "") -> Set[str]:
 
     r = client.run(build_script(body, root=root), timeout=60, allow_failure=True)
     if r.rc != 0 or "DONE=1" not in r.out:
-        raise fail("OWBM-E-MIG-003", reason="не завершилось чтение списка /etc/config")
+        raise fail("OWBM-E-MIG-003", reason=i18n.tr("migrate.error.config_list_incomplete"))
     names = set()
     for line in r.out.splitlines():
         key, _, value = line.partition("=")
@@ -428,11 +424,11 @@ def _payload_files(archive_path: Path, parsed: Manifest, payloads: Sequence[str]
                     path_bytes += len(member.name.encode("utf-8", "replace"))
                     total_size += max(member.size, 0)
                     if members_seen > archive.MAX_TAR_MEMBERS:
-                        raise fail("OWBM-E-CHK-002", reason="слишком много элементов во вложенных tar")
+                        raise fail("OWBM-E-CHK-002", reason=i18n.tr("migrate.error.nested_tar_count"))
                     if path_bytes > archive.MAX_TAR_PATH_BYTES:
-                        raise fail("OWBM-E-CHK-002", reason="имена элементов во вложенных tar превышают предел 16 МиБ")
+                        raise fail("OWBM-E-CHK-002", reason=i18n.tr("migrate.error.nested_tar_names"))
                     if total_size > archive.MAX_TAR_UNCOMPRESSED_BYTES:
-                        raise fail("OWBM-E-CHK-002", reason="вложенные tar превышают предел распаковки 64 ГиБ")
+                        raise fail("OWBM-E-CHK-002", reason=i18n.tr("migrate.error.nested_tar_size"))
                     if not member.isfile() or member.size == 0 or member.size > MAX_FILE_BYTES:
                         continue
                     name = member.name
@@ -465,7 +461,7 @@ def target_file_list(client, *, root: str = "", limit: int = 40000) -> Tuple[Set
 
     result = client.run(build_script(body, root=root), timeout=180, allow_failure=True)
     if result.rc != 0 or "DONE=1" not in result.out:
-        raise fail("OWBM-E-MIG-003", reason="не завершилось сканирование файлов цели")
+        raise fail("OWBM-E-MIG-003", reason=i18n.tr("migrate.error.target_scan_incomplete"))
     files = set()
     for line in result.out.splitlines():
         text = line.strip()
@@ -528,20 +524,13 @@ def build_plan(
             plan.packages_unavailable.append(name)
 
     if source_arch and target_arch and source_arch != target_arch:
-        plan.warnings.append(
-            f"Архив собран для {source_arch}, цель — {target_arch}: пакеты из репозиториев "
-            "цели устанавливаются по именам; пакетные файлы из архива допускаются только "
-            "для noarch/all либо при совпадении архитектуры, target и release."
-        )
+        plan.warnings.append(i18n.tr(
+            "migrate.warning.architecture", source=source_arch, target=target_arch
+        ))
     if plan.packages_archive_install:
-        plan.warnings.append(
-            "Часть пакетов будет установлена из локальных файлов архива; зависимости "
-            "должны быть уже установлены или доступны в репозиториях цели."
-        )
+        plan.warnings.append(i18n.tr("migrate.warning.archive_packages"))
     if plan.packages_archive_incompatible:
-        plan.warnings.append(
-            "Пакеты из архива пропущены: менеджер, архитектура, target/release или ABI не совместимы с целью."
-        )
+        plan.warnings.append(i18n.tr("migrate.warning.incompatible_packages"))
 
     existing = target_config_names(client, root=root)
     for path in sorted(source_configs(archive_path)):
@@ -560,10 +549,7 @@ def build_plan(
     if options.copy_files:
         existing_files, file_scan_truncated = target_file_list(client, root=root)
         if file_scan_truncated:
-            plan.warnings.append(
-                "Сканирование файлов цели превысило 40 000 записей; копирование файлов приложений отключено, "
-                "чтобы не перезаписать существующие файлы."
-            )
+            plan.warnings.append(i18n.tr("migrate.warning.file_scan_limit"))
         else:
             seen = set()
             for name, data in _payload_files(archive_path, parsed, FILE_PAYLOAD_IDS):
@@ -578,17 +564,13 @@ def build_plan(
                 plan.files_copy.append(name)
 
     if plan.files_skipped_binary:
-        plan.warnings.append(
-            f"Пропущено {len(plan.files_skipped_binary)} бинарных файлов источника: "
-            "они собраны под другую архитектуру и на цели не запустятся."
-        )
+        plan.warnings.append(i18n.tr(
+            "migrate.warning.binary_files", count=len(plan.files_skipped_binary)
+        ))
     if plan.configs_kept:
-        plan.warnings.append(
-            "Совпадающие конфиги цели сохранены как есть (сеть, firewall, ssh и т.п.). "
-            "Для полного клонирования используйте --replace-config."
-        )
+        plan.warnings.append(i18n.tr("migrate.warning.keep_configs"))
     if not options.install_packages and (plan.packages_install or plan.packages_archive_install):
-        plan.warnings.append("Установка пакетов отключена: --no-install-packages.")
+        plan.warnings.append(i18n.tr("migrate.warning.packages_disabled"))
     return plan
 
 
@@ -625,14 +607,14 @@ def _install(client, names: Sequence[str], *, manager: str, logger) -> Tuple[Lis
             failed.append(name)
 
     if not failed:
-        logger.ok(f"Установлено пакетов: {len(installed)}")
+        logger.ok(i18n.tr("migrate.log.packages_installed", count=len(installed)))
         client.run(f"rm -f {PACKAGE_LOG}", timeout=30, allow_failure=True)
         return installed, []
 
     detail = " ".join(
         line for line in result.out.splitlines() if "ORDER=" not in line and line.strip()
     )[-400:]
-    logger.warn(f"Установка пакетов не подтверждена: {detail or ', '.join(failed)}")
+    logger.warn(i18n.tr("migrate.log.packages_unconfirmed", detail=detail or ', '.join(failed)))
     return installed, failed
 
 
@@ -675,9 +657,7 @@ def _install_archive_packages(
     selected_names = [name for name, _filename, _size in selected]
     total_bytes = sum(size for _name, _filename, size in selected)
     if total_bytes > MAX_PACKAGE_BUNDLE_BYTES:
-        logger.warn(
-            f"Пакетный набор из архива слишком велик ({total_bytes} байт); установка пропущена."
-        )
+        logger.warn(i18n.tr("migrate.warning.bundle_limit", size=total_bytes))
         return [], list(names)
 
     suffix = ".apk" if target_manager == "apk" else ".ipk"
@@ -700,7 +680,7 @@ def _install_archive_packages(
                         if filename in seen_source:
                             raise fail(
                                 "OWBM-E-CHK-002",
-                                reason=f"повторяющийся пакетный файл {filename}",
+                                reason=i18n.tr("migrate.error.package_duplicate", filename=filename),
                             )
                         seen_source.add(filename)
                         name, expected_size = selected_file
@@ -708,7 +688,7 @@ def _install_archive_packages(
                         if not member.isfile() or member.size != expected_size or handle is None:
                             raise OwbmError(
                                 "OWBM-E-CHK-002",
-                                reason=f"повреждён пакетный файл {filename} в архиве",
+                                reason=i18n.tr("migrate.error.package_corrupt", filename=filename),
                             )
                         info = tarfile.TarInfo(name + suffix)
                         info.size = member.size
@@ -752,20 +732,23 @@ def _install_archive_packages(
             failed.extend(name for name in selected_names if name not in confirmed)
         failed.extend(name for name in missing_names if name not in failed)
         if not failed and len(installed) == len(selected):
-            logger.ok(f"Установлено из архива: {len(installed)} пакетов")
+            logger.ok(i18n.tr("migrate.log.archive_packages_installed", count=len(installed)))
         else:
             detail = " ".join(
                 line.strip() for line in response.out.splitlines()
                 if line.strip() and not line.startswith(("INSTALLED=", "FAILED=", "INSTALL="))
             )[-300:]
-            logger.warn("Не все пакетные файлы из архива установлены" + (f": {detail}" if detail else "."))
+            logger.warn(i18n.tr(
+                "migrate.warning.archive_packages_incomplete",
+                detail=f": {detail}" if detail else ".",
+            ))
         return installed, failed
     finally:
         cleanup = "rm -rf " + shlex.quote(stage) + "\necho CLEAN=1\n"
         try:
             client.run(build_script(cleanup, root=root), timeout=60, allow_failure=True)
         except Exception as exc:  # cleanup must not mask the install/transfer result
-            logger.warn(f"Не удалось очистить временный каталог пакетов: {exc}")
+            logger.warn(i18n.tr("migrate.warning.cleanup_packages", error=exc))
 
 
 def _validate_pre_restore_archive(
@@ -780,27 +763,27 @@ def _validate_pre_restore_archive(
         raise fail(
             "OWBM-E-RST-001",
             step="pre-restore",
-            reason="передан не снимок pre-restore цели",
+            reason=i18n.tr("migrate.error.not_pre_restore"),
         )
     for key, expected in (expected_device or {}).items():
         if expected and str(parsed.device.get(key, "")) != expected:
             raise fail(
                 "OWBM-E-RST-001",
                 step="pre-restore",
-                reason=f"снимок относится к другому устройству ({key})",
+                reason=i18n.tr("migrate.error.snapshot_wrong_device", key=key),
             )
     component = parsed.component("configuration")
     if component is None:
         raise fail(
             "OWBM-E-RST-001",
             step="pre-restore",
-            reason="снимок цели не содержит конфигурацию",
+            reason=i18n.tr("migrate.error.snapshot_no_config"),
         )
     if component.path != "payload/configuration.tar.gz":
         raise fail(
             "OWBM-E-RST-001",
             step="pre-restore",
-            reason="компонент configuration ссылается на неожиданный файл",
+            reason=i18n.tr("migrate.error.snapshot_unexpected_path"),
         )
 
     try:
@@ -813,7 +796,7 @@ def _validate_pre_restore_archive(
                 raise fail(
                     "OWBM-E-RST-001",
                     step="pre-restore",
-                    reason="контрольные суммы конфигурации в снимке не совпадают",
+                    reason=i18n.tr("migrate.error.snapshot_checksums"),
                 )
             digest = hashlib.sha256()
             with zf.open(component.path) as payload_stream:
@@ -823,13 +806,13 @@ def _validate_pre_restore_archive(
                 raise fail(
                     "OWBM-E-RST-001",
                     step="pre-restore",
-                    reason="контрольная сумма конфигурации снимка не прошла проверку",
+                    reason=i18n.tr("migrate.error.snapshot_checksum_failed"),
                 )
     except (OSError, zipfile.BadZipFile, KeyError, UnicodeDecodeError) as exc:
         raise fail(
             "OWBM-E-RST-001",
             step="pre-restore",
-            reason=f"не удалось проверить конфигурацию снимка: {exc}",
+            reason=i18n.tr("migrate.error.snapshot_validate", error=exc),
         )
 
     validation_dir = Path(workdir) / "pre-restore-validation"
@@ -858,7 +841,7 @@ def apply_plan(
     if options.install_packages != plan.install_packages_enabled:
         raise fail("OWBM-E-MIG-001")
     if options.dry_run:
-        result.messages.append("Пробный прогон: изменений не вносилось.")
+        result.messages.append(i18n.tr("migrate.result.dry_run"))
         return result
     changes_planned = bool(
         plan.configs_copy
@@ -870,7 +853,7 @@ def apply_plan(
         raise fail(
             "OWBM-E-RST-001",
             step="pre-restore",
-            reason="применение без снимка цели запрещено",
+            reason=i18n.tr("migrate.error.no_snapshot"),
         )
     if changes_planned and pre_restore_archive is not None:
         if not plan.target_identity or not any(plan.target_identity.values()):
@@ -887,15 +870,12 @@ def apply_plan(
     if options.reload and reload_sensitive:
         raise fail(
             "OWBM-E-CMP-003",
-            reason=(
-                "--reload запрещён при замене network/firewall/dropbear/wireless без удалённого сторожа; "
-                "выполните применение только при локальном доступе"
-            ),
+            reason=i18n.tr("migrate.error.reload_sensitive"),
         )
     payloads = source_configs(archive_path)
 
     if options.install_packages and plan.packages_install:
-        logger.step(f"Установка {len(plan.packages_install)} пакетов из репозиториев цели")
+        logger.step(i18n.tr("migrate.log.install_repositories", count=len(plan.packages_install)))
         installed, failed = _install(
             client, plan.packages_install, manager=current_passport.packages.manager, logger=logger
         )
@@ -903,13 +883,13 @@ def apply_plan(
         result.install_failed = failed
         if failed:
             result.ok = False
-            result.messages.append(
-                "Не удалось установить из репозиториев: " + ", ".join(failed[:20])
-                + (" и другие" if len(failed) > 20 else "")
-            )
+            result.messages.append(i18n.tr(
+                "migrate.result.install_failed", names=', '.join(failed[:20]),
+                more=i18n.tr("migrate.result.and_others") if len(failed) > 20 else "",
+            ))
 
     if options.install_packages and plan.packages_archive_install:
-        logger.step(f"Установка {len(plan.packages_archive_install)} совместимых пакетов из архива")
+        logger.step(i18n.tr("migrate.log.install_archive", count=len(plan.packages_archive_install)))
         source_manager, source_arch, _records = source_package_inventory(archive_path)
         installed, failed = _install_archive_packages(
             client,
@@ -932,7 +912,9 @@ def apply_plan(
         result.archive_install_failed = failed
         if failed:
             result.ok = False
-            result.messages.append("Не удалось установить из архива: " + ", ".join(failed[:20]))
+            result.messages.append(i18n.tr(
+                "migrate.result.archive_install_failed", names=', '.join(failed[:20])
+            ))
 
     config_write_started = False
     configs_attempted: List[str] = []
@@ -950,36 +932,36 @@ def apply_plan(
             configs_attempted.append(name)
             send_file(client, command, source, allow_empty=True)
             result.configs_written.append(name)
-            logger.debug(f"скопирован конфиг: {name}")
+            logger.debug(i18n.tr("migrate.log.copy_config", name=name))
 
         if result.configs_written:
-            logger.ok(f"Конфигов скопировано: {len(result.configs_written)}")
+            logger.ok(i18n.tr("migrate.log.configs_copied", count=len(result.configs_written)))
 
         if result.plan.files_copy:
             restored = copy_files(client, parsed, archive_path, workdir, result.plan.files_copy, logger, root=root)
             result.files_written = restored
-            logger.ok(f"Файлов приложений скопировано: {len(restored)}")
+            logger.ok(i18n.tr("migrate.log.files_copied", count=len(restored)))
     except Exception as exc:
         result.ok = False
-        result.messages.append(f"Перенос прерван: {exc}")
+        result.messages.append(i18n.tr("migrate.result.interrupted", error=exc))
         if config_write_started and pre_restore_archive is not None:
             try:
                 _rollback_configuration(
                     client, pre_restore_archive, workdir, logger,
                     names=configs_attempted, root=root,
                 )
-                result.messages.append("Конфигурация цели возвращена из снимка pre-restore.")
+                result.messages.append(i18n.tr("migrate.result.rollback_restored"))
             except Exception as rollback_exc:
-                result.messages.append(f"Не удалось автоматически вернуть конфигурацию: {rollback_exc}")
+                result.messages.append(i18n.tr("migrate.result.rollback_failed", error=rollback_exc))
         return result
 
     if options.reload and (result.configs_written or result.installed or result.installed_from_archive):
-        logger.info("Применяю конфигурацию (reload_config)…")
+        logger.info(i18n.tr("migrate.log.reload"))
         try:
             _reload_configuration(client)
         except Exception as exc:
             result.ok = False
-            result.messages.append(f"Не удалось подтвердить reload_config: {exc}")
+            result.messages.append(i18n.tr("migrate.result.reload_failed", error=exc))
             if config_write_started and pre_restore_archive is not None:
                 try:
                     _rollback_configuration(
@@ -988,22 +970,16 @@ def apply_plan(
                     )
                     try:
                         _reload_configuration(client)
-                        result.messages.append(
-                            "Конфигурация и службы возвращены к состоянию pre-restore."
-                        )
+                        result.messages.append(i18n.tr("migrate.result.rollback_reloaded"))
                     except Exception as reload_exc:
-                        result.messages.append(
-                            "Файлы конфигурации возвращены, но не удалось применить их: "
-                            f"{reload_exc}"
-                        )
+                        result.messages.append(i18n.tr(
+                            "migrate.result.rollback_reload_failed", error=reload_exc
+                        ))
                 except Exception as rollback_exc:
-                    result.messages.append(f"Не удалось автоматически вернуть конфигурацию: {rollback_exc}")
+                    result.messages.append(i18n.tr("migrate.result.rollback_failed", error=rollback_exc))
             return result
     elif result.configs_written or result.installed or result.installed_from_archive:
-        result.messages.append(
-            "Изменения записаны, но службы не перезапускались. "
-            "Примените их перезагрузкой устройства или флагом --reload."
-        )
+        result.messages.append(i18n.tr("migrate.result.not_reloaded"))
     return result
 
 
@@ -1077,7 +1053,7 @@ def _reload_configuration(client) -> None:
         raise fail(
             "OWBM-E-RST-001",
             step="reload_config",
-            reason="цель не подтвердила применение конфигурации",
+            reason=i18n.tr("migrate.error.reload_unconfirmed"),
         )
 
 
@@ -1095,10 +1071,10 @@ def _rollback_configuration(
     report.raise_first()
     parsed = manifest_mod.validate(report.manifest or {})
     if parsed.mode != "pre-restore":
-        raise fail("OWBM-E-CHK-002", reason="передан архив не в режиме pre-restore")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("migrate.error.not_pre_restore"))
     component = parsed.component("configuration")
     if component is None or component.path != "payload/configuration.tar.gz":
-        raise fail("OWBM-E-CHK-002", reason="в снимке pre-restore нет конфигурации")
+        raise fail("OWBM-E-CHK-002", reason=i18n.tr("migrate.error.snapshot_no_config"))
     payload = archive.extract_member(
         snapshot, component.path, Path(workdir) / "rollback"
     )
@@ -1114,4 +1090,4 @@ def _rollback_configuration(
             body += f"if [ -f {shlex.quote(target)} ] || [ -L {shlex.quote(target)} ]; then rm -f -- {shlex.quote(target)}; fi\n"
         client.run(build_script(body, root=root), timeout=60, allow_failure=False)
     send_file(client, "tar -xzpf - -C " + shlex.quote((root or "") + "/"), payload)
-    logger.warn("Конфигурация восстановлена из pre-restore.")
+    logger.warn(i18n.tr("migrate.warning.config_restored"))

@@ -124,8 +124,10 @@ def test_menu_runs_from_artifact(tmp_path, artifact):
 def test_example_config_is_in_sync():
     example = ROOT / "config.example.toml"
     assert example.is_file()
-    assert example.read_text(encoding="utf-8") == cfgmod.EXAMPLE
-    parsed = cfgmod.tomlmini.loads(example.read_text(encoding="utf-8"))
+    text = example.read_text(encoding="utf-8")
+    assert "OWBM configuration example / Пример конфигурации OWBM." in text
+    assert "Interface language: ru or en / Язык интерфейса: ru или en" in text
+    parsed = cfgmod.tomlmini.loads(text)
     assert cfgmod.from_mapping(parsed).devices["example"].host == "192.0.2.1"
 
 

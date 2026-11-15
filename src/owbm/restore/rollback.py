@@ -17,6 +17,7 @@ import shlex
 from typing import List
 
 from ..errors import fail
+from .. import i18n
 from ..remote import ProbeResult, build_script, run_probe
 
 WATCHDOG_PATH = "/tmp/owbm-watchdog.sh"
@@ -144,14 +145,14 @@ def disarm_script(root: str = "") -> str:
 def stage(client, *, root: str = "") -> ProbeResult:
     head = run_probe(client, stage_script(root), root=root, timeout=60)
     if head.one("STAGED") != "1":
-        raise fail("OWBM-E-CMP-003", reason="не удалось сохранить сетевые настройки цели для отката")
+        raise fail("OWBM-E-CMP-003", reason=i18n.tr("restore.rollback.stage_failed"))
     return head
 
 
 def arm(client, *, root: str = "", timeout: int = 180) -> ProbeResult:
     head = run_probe(client, arm_script(root, timeout), root=root, timeout=30)
     if head.one("ARMED") != "1":
-        raise fail("OWBM-E-CMP-003", reason="не удалось включить сторожевой процесс на устройстве")
+        raise fail("OWBM-E-CMP-003", reason=i18n.tr("restore.rollback.arm_failed"))
     return head
 
 

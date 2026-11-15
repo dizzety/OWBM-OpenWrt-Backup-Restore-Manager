@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from owbm import config as cfgmod
+from owbm import config as cfgmod, i18n
 from owbm.errors import OwbmError
 
 
@@ -25,6 +25,16 @@ def test_missing_config_is_not_an_error(xdg):
     assert cfg.general.language == "ru"
     assert cfg.backup_root() == xdg / "data" / "owbm" / "backups"
     assert cfg.known_hosts() == xdg / "state" / "owbm" / "known_hosts"
+
+
+def test_example_text_follows_selected_language():
+    token = i18n.set_language("en")
+    try:
+        assert "# OWBM configuration example." in cfgmod.example_text()
+        assert 'label = "my router"' in cfgmod.example_text()
+        assert 'language = "ru"' in cfgmod.example_text()
+    finally:
+        i18n.reset_language(token)
 
 
 def test_load_example(xdg):

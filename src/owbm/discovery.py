@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from . import i18n
 from .adapters import apk, filesystem, mountinfo, opkg, overlayfs, sysupgrade
 from .adapters.apk import PackageEntry
 from .adapters.mountinfo import MountEntry
@@ -455,7 +456,7 @@ def build_passport(probe: ProbeResult) -> DevicePassport:
     unknown: List[str] = []
 
     if probe.malformed:
-        warnings.append(f"Ответ устройства содержал {len(probe.malformed)} нераспознанных строк.")
+        warnings.append(i18n.tr("discovery.warning.malformed", count=len(probe.malformed)))
 
     release = _release_vars(probe)
     board_json = _json_lines(probe, "BOARDJSON") or {}
@@ -466,9 +467,9 @@ def build_passport(probe: ProbeResult) -> DevicePassport:
     is_openwrt = release_file and ("openwrt" in distrib_id.lower() or not distrib_id or distrib_id.lower() == "openwrt")
     if not release_file:
         is_openwrt = False
-        warnings.append("Файл /etc/openwrt_release не найден.")
+        warnings.append(i18n.tr("discovery.warning.release_missing"))
     elif distrib_id and "openwrt" not in distrib_id.lower():
-        warnings.append(f"Система сообщает о себе как «{distrib_id}»; похоже на форк OpenWrt.")
+        warnings.append(i18n.tr("discovery.warning.fork", id=distrib_id))
 
     model_info = board_json.get("model") if isinstance(board_json.get("model"), dict) else {}
     ubus_model = ubus.get("model") if isinstance(ubus.get("model"), dict) else {}
@@ -501,7 +502,7 @@ def build_passport(probe: ProbeResult) -> DevicePassport:
     )
     if not arch:
         unknown.append("arch")
-        warnings.append("Не удалось определить архитектуру пакетов.")
+        warnings.append(i18n.tr("discovery.warning.arch_missing"))
 
     kernel = _first_nonempty(probe.all("KERNEL"))
     if not kernel:
@@ -517,9 +518,7 @@ def build_passport(probe: ProbeResult) -> DevicePassport:
         unknown.append("release")
     if not board_name:
         unknown.append("board_name")
-        warnings.append(
-            "Устройство не сообщило идентификатор платы: привязка архива к модели будет неполной."
-        )
+        warnings.append(i18n.tr("discovery.warning.board_missing"))
 
     macs: List[str] = []
     interfaces: List[NetIface] = []
@@ -555,7 +554,7 @@ def build_passport(probe: ProbeResult) -> DevicePassport:
         repositories = tuple(opkg.parse_conf_files(probe.all("OPKGCONF")))
         pkg_arch = arch
     else:
-        warnings.append("Пакетный менеджер не обнаружен: список пакетов сохранить не удастся.")
+        warnings.append(i18n.tr("discovery.warning.manager_missing"))
 
     kernel_package = ""
     for entry in entries:
@@ -565,16 +564,13 @@ def build_passport(probe: ProbeResult) -> DevicePassport:
 
     arch_mismatch = tuple(sorted({e.arch for e in entries if e.arch and arch and e.arch != arch and e.name != "kernel"}))
     if arch_mismatch:
-        warnings.append(
-            "В установленных пакетах встречаются архитектуры, отличные от системной: "
-            + ", ".join(arch_mismatch)
-        )
+        warnings.append(i18n.tr("discovery.warning.arch_mismatch", architectures=', '.join(arch_mismatch)))
 
     mounts = mountinfo.parse(probe.all("MOUNT"))
     if not mounts:
         mounts = _parse_proc_mounts(probe.all("MOUNTS"))
         if mounts:
-            warnings.append("Таблица mountinfo недоступна, использован /proc/mounts (меньше данных).")
+            warnings.append(i18n.tr("discovery.warning.mountinfo_fallback"))
     free_space = _parse_free_space(probe.all("DF"))
 
     def free_for(path: str) -> Optional[int]:
@@ -593,7 +589,7 @@ def build_passport(probe: ProbeResult) -> DevicePassport:
     root_source = root.source if root else ""
     if not root:
         unknown.append("root_mount")
-        warnings.append("Не удалось определить корневую файловую систему.")
+        warnings.append(i18n.tr("discovery.warning.root_missing"))
 
     overlay_mount = mountinfo.overlay_mount(mounts)
     layout = overlayfs.layout(overlay_mount)
@@ -612,27 +608,17 @@ def build_passport(probe: ProbeResult) -> DevicePassport:
                 persistent=persistent,
             )
             if upper_mount and filesystem.is_ram(upper_mount.fstype):
-                warnings.append(
-                    "Верхний слой OverlayFS находится в оперативной памяти: изменения не сохранятся после перезагрузки."
-                )
+                warnings.append(i18n.tr("discovery.warning.overlay_ram"))
         else:
-            warnings.append(
-                "Обнаружен OverlayFS без записываемого верхнего слоя (upperdir): изменения не сохраняются."
-            )
+            warnings.append(i18n.tr("discovery.warning.overlay_upper_missing"))
 
     if overlay_mount is None and root_fstype and not filesystem.is_persistent(root_fstype):
         if filesystem.classify(root_fstype) == "readonly":
-            warnings.append(
-                "Корневая ФС только для чтения и OverlayFS не обнаружен: "
-                "пользовательские изменения на устройстве отсутствуют или хранятся иначе."
-            )
+            warnings.append(i18n.tr("discovery.warning.readonly_root"))
 
     extroot = _detect_extroot(probe)
     if extroot and overlay_info is None:
-        warnings.append(
-            "Обнаружена конфигурация extroot, но OverlayFS не смонтирован: "
-            "внешний носитель, вероятно, не подключён или не смонтирован."
-        )
+        warnings.append(i18n.tr("discovery.warning.extroot"))
 
     writable_path = overlay_info.upperdir if overlay_info and overlay_info.upperdir else "/"
     writable_persistent = bool(
@@ -650,13 +636,13 @@ def build_passport(probe: ProbeResult) -> DevicePassport:
     sys_info = sysupgrade.analyze(sysupgrade_path, probe.all("SYS_UPGRADE_HELP"))
 
     if "sha256sum" not in tools:
-        warnings.append("На устройстве нет sha256sum: контрольные суммы считаются только на компьютере.")
+        warnings.append(i18n.tr("discovery.warning.no_sha256sum"))
 
     device_time = DeviceTime(utc=probe.one("TIME_UTC"), plausible=True)
     parsed_time = parse_iso(device_time.utc)
     if parsed_time is not None and parsed_time.year < 2020:
         device_time = DeviceTime(utc=device_time.utc, plausible=False)
-        warnings.append("Часы устройства показывают дату раньше 2020 года.")
+        warnings.append(i18n.tr("discovery.warning.clock"))
 
     passport = DevicePassport(
         identity=Identity(
@@ -742,20 +728,20 @@ def quick_identity(client, *, root: str = "") -> Tuple[str, Tuple[str, ...]]:
     """Board name and MACs only — used to prove identity after a key change."""
     probe = run_probe(client, QUICK_IDENTITY_SCRIPT, root=root, timeout=60)
     if not probe.has("DONE"):
-        raise fail("OWBM-E-DSC-002", stage="проверка идентичности", reason="устройство не ответило")
+        raise fail("OWBM-E-DSC-002", stage="identity check", reason=i18n.tr("discovery.error.device_no_response"))
     return probe.one("BOARD", "unknown"), tuple(probe.all("MAC"))
 
 
 def discover(client, *, root: str = "", logger=None, timeout: int = 120) -> DevicePassport:
     """Run the read-only probe and assemble the passport."""
     if logger:
-        logger.debug("Опрос устройства (только чтение)")
+        logger.debug(i18n.tr("discovery.log.probe"))
     probe = run_probe(client, DISCOVERY_SCRIPT, root=root, timeout=timeout)
     if not probe.has("DONE"):
-        raise fail("OWBM-E-DSC-002", stage="опрос устройства", reason="скрипт опроса не завершился")
+        raise fail("OWBM-E-DSC-002", stage="device discovery", reason=i18n.tr("discovery.error.probe_failed"))
     for missing in probe.all("CMD_MISSING"):
         if logger:
-            logger.debug(f"на устройстве нет команды {missing}")
+            logger.debug(i18n.tr("discovery.log.command_missing", command=missing))
     passport = build_passport(probe)
     if passport.identity.system_type != "openwrt":
         raise fail("OWBM-E-DSC-001", host=client.target.host)

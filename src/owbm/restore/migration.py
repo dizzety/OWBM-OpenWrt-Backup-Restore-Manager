@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Sequence
 
+from .. import i18n
 from ..discovery import DevicePassport
 from ..manifest import Manifest
 
@@ -53,11 +54,8 @@ def adapt(
         result.append(
             Adaptation(
                 id="drop-binary-packages",
-                title="Бинарные пакеты не переносятся",
-                detail=(
-                    f"Архив собран для {key['arch']}, целевое устройство — {identity.arch}. "
-                    "Файлы пакетов будут исключены, пакеты нужно ставить из репозиториев цели."
-                ),
+                title=i18n.tr("migration.adaptation.binary.title"),
+                detail=i18n.tr("migration.adaptation.binary.detail", source=key['arch'], target=identity.arch),
                 risk=RISK_MEDIUM,
                 automatic=True,
                 excludes=("packages_binaries",),
@@ -68,11 +66,9 @@ def adapt(
         result.append(
             Adaptation(
                 id="package-manager-change",
-                title="Смена пакетного менеджера",
-                detail=(
-                    f"Архив: {key['package_manager'].upper()}, цель: {passport.packages.manager.upper()}. "
-                    "Список пакетов сохраняется как справка, автоматическая установка невозможна."
-                ),
+                title=i18n.tr("migration.adaptation.manager.title"),
+                detail=i18n.tr("migration.adaptation.manager.detail", source=key['package_manager'].upper(),
+                               target=passport.packages.manager.upper()),
                 risk=RISK_MEDIUM,
                 automatic=True,
                 excludes=("packages_binaries",),
@@ -83,12 +79,8 @@ def adapt(
         result.append(
             Adaptation(
                 id="board-change",
-                title="Другая модель устройства",
-                detail=(
-                    f"Архив снят с «{key['board_id']}», цель — «{identity.board_id}». "
-                    "Секция wireless и параметры оборудования почти наверняка не подойдут: "
-                    "после восстановления проверьте /etc/config/wireless и удалите чужие радио-секции."
-                ),
+                title=i18n.tr("migration.adaptation.board.title"),
+                detail=i18n.tr("migration.adaptation.board.detail", source=key['board_id'], target=identity.board_id),
                 risk=RISK_HIGH,
                 automatic=False,
             )
@@ -98,11 +90,8 @@ def adapt(
         result.append(
             Adaptation(
                 id="target-change",
-                title="Другая цель сборки",
-                detail=(
-                    f"{key['target']} → {identity.target}: наборы драйверов и ядер различаются. "
-                    "Модули ядра и системные пакеты из архива не применяются."
-                ),
+                title=i18n.tr("migration.adaptation.target.title"),
+                detail=i18n.tr("migration.adaptation.target.detail", source=key['target'], target=identity.target),
                 risk=RISK_HIGH,
                 automatic=False,
             )
@@ -112,11 +101,9 @@ def adapt(
         result.append(
             Adaptation(
                 id="kernel-change",
-                title="Другое ядро",
-                detail=(
-                    f"Пакет ядра: {key['kernel_package']} → {identity.kernel_package}. "
-                    "Модули из архива несовместимы; после перезагрузки проверьте dmesg на отсутствующие модули."
-                ),
+                title=i18n.tr("migration.adaptation.kernel.title"),
+                detail=i18n.tr("migration.adaptation.kernel.detail", source=key['kernel_package'],
+                               target=identity.kernel_package),
                 risk=RISK_HIGH,
                 automatic=False,
             )
@@ -131,13 +118,8 @@ def adapt(
             result.append(
                 Adaptation(
                     id="interface-missing",
-                    title="Интерфейсы архива отсутствуют на цели",
-                    detail=(
-                        "В архиве есть: "
-                        + ", ".join(missing)
-                        + ". На цели их нет: правила в /etc/config/network и /etc/config/firewall "
-                        "нужно перенести на существующие интерфейсы, иначе сеть не поднимется."
-                    ),
+                    title=i18n.tr("migration.adaptation.interfaces_missing.title"),
+                    detail=i18n.tr("migration.adaptation.interfaces_missing.detail", interfaces=', '.join(missing)),
                     risk=RISK_HIGH,
                     automatic=False,
                 )
@@ -146,8 +128,8 @@ def adapt(
             result.append(
                 Adaptation(
                     id="interface-extra",
-                    title="На цели есть новые интерфейсы",
-                    detail="Не описаны в архиве: " + ", ".join(extra) + ". Их настройки сохраняются как есть.",
+                    title=i18n.tr("migration.adaptation.interfaces_extra.title"),
+                    detail=i18n.tr("migration.adaptation.interfaces_extra.detail", interfaces=', '.join(extra)),
                     risk=RISK_LOW,
                     automatic=False,
                 )
@@ -157,11 +139,8 @@ def adapt(
         result.append(
             Adaptation(
                 id="storage-change",
-                title="Другая схема хранения",
-                detail=(
-                    "В архиве записываемый слой OverlayFS, на цели его нет. "
-                    "Файлы будут разложены по объединённой файловой системе; часть метаданных слоя теряется."
-                ),
+                title=i18n.tr("migration.adaptation.storage.title"),
+                detail=i18n.tr("migration.adaptation.storage.detail"),
                 risk=RISK_MEDIUM,
                 automatic=True,
             )

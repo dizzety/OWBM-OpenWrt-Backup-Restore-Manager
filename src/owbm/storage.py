@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional
 
-from . import archive
+from . import archive, i18n
 from .errors import fail
 from .log import redact
 from .util import atomic_publish, ensure_dir, free_bytes, parse_iso, safe_component, utc_stamp
@@ -254,7 +254,7 @@ class ArchiveStore:
             info = ArchiveInfo(path=path, name=path.name, size=stat.st_size, mtime=stat.st_mtime)
             info.mode = "pre-restore" if PRE_RESTORE_DIRNAME in path.parts else "backup"
             if path.name.endswith(".age") or path.name.endswith(".gpg"):
-                info.error = "зашифрованный архив: содержимое не индексируется"
+                info.error = i18n.tr("storage.encrypted_unindexed")
             else:
                 try:
                     data = archive.read_manifest(path)
